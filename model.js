@@ -66,19 +66,35 @@ const EyeModel = (() => {
 
   const geo = {};
 
-  geo.sclera = (p) => lathe(shellProfile(E.R_sc, E.R_sci, E.r_limb, p.elong));
+  // limbScale — относительное увеличение роговицы (детский глаз, буфтальм): купол масштабируется вокруг вершины
+  geo.sclera = (p) => lathe(shellProfile(E.R_sc, E.R_sci, E.r_limb * (p.limbScale || 1), p.elong));
   geo.choroid = (p) => lathe(shellProfileY(E.R_sci - 0.005, E.R_ch, E.y_ora, p.elong));
   geo.retina = (p) => lathe(shellProfileY(E.R_ch - 0.005, E.R_ret, E.y_ora, p.elong));
 
   geo.cornea = (p) => {
-    const k = p.cone || 0; // кератоконус 0..1
+    const k = p.cone || 0, ks = p.limbScale || 1; // кератоконус 0..1, масштаб купола
     const bump = (r) => Math.exp(-(r / 2.2) * (r / 2.2));
     const ao = angAt(E.R_ca, E.r_limb), ai = angAt(E.R_cp, 5.5);
-    const outer = arc(0, E.c_ca, E.R_ca, ao, Math.PI / 2, 48).map(([r, y]) => [r, y + 1.3 * k * bump(r)]);
-    const inner = arc(0, E.c_cp, E.R_cp, Math.PI / 2, ai, 48).map(([r, y]) => [r, y + 1.75 * k * bump(r)]);
+    const sc = ([r, y]) => [r * ks, E.apex - (E.apex - y) * ks];
+    const outer = arc(0, E.c_ca, E.R_ca, ao, Math.PI / 2, 48).map(([r, y]) => [r, y + 1.3 * k * bump(r)]).map(sc);
+    const inner = arc(0, E.c_cp, E.R_cp, Math.PI / 2, ai, 48).map(([r, y]) => [r, y + 1.75 * k * bump(r)]).map(sc);
     const pts = [...outer, ...inner, outer[0]];
     return lathe(pts);
   };
+
+  // Трабекулярная сеть — клин в углу передней камеры; шлеммов канал — кольцевой сосуд рядом с ней
+  geo.trabecular = () => lathe([[5.55, 9.28], [5.95, 8.95], [6.2, 8.98], [6.12, 9.18], [5.75, 9.36], [5.55, 9.28]]);
+  geo.schlemm = () => lathe(arc(6.28, 9.12, 0.13, 0, Math.PI * 2, 14).concat([[6.28 + 0.13, 9.12]]), 128);
+  // Задняя камера: между задней поверхностью радужки, цилиарным телом, связками и передней поверхностью хрусталика
+  geo.posterior_chamber = () => {
+    const a = lensArcs(1);
+    const aP = Math.acos(E.pupil / a.Ra), aEq = Math.acos(4.4 / a.Ra);
+    const lensFront = arc(0, a.ca, a.Ra, aP, aEq, 16); // от зрачкового края к экватору по хрусталику
+    const pts = [...lensFront, [6.4, 7.86], [6.5, 8.62], [E.pupil + 0.2, 8.99], lensFront[0]];
+    return lathe(pts);
+  };
+  // Пигментный эпителий и мембрана Бруха: тонкий тёмный слой между сетчаткой и хориоидеей
+  geo.rpe = (p) => lathe(shellProfileY(E.R_ch + 0.02, E.R_ch - 0.04, E.y_ora, p.elong));
 
   geo.iris = (p) => {
     const rp = p.pupil || E.pupil, r1 = 6.1, b = p.bombe || 0; // b — выпячивание корня при закрытии угла
@@ -98,16 +114,18 @@ const EyeModel = (() => {
   geo.zonule = () => lathe([[4.55, 7.3], [6.4, 7.6], [6.4, 7.85], [4.55, 7.5], [4.55, 7.3]]);
 
   // Хрусталик: задняя дуга от задней вершины к экватору, передняя от экватора к передней вершине
-  function lensArcs(scale = 1) {
-    const r = E.lens_r * scale, sa = E.lens_sa * scale, sp = E.lens_sp * scale;
+  function lensArcs(scale = 1, thick = scale) {
+    const r = E.lens_r * scale, sa = E.lens_sa * thick, sp = E.lens_sp * thick;
     const Ra = (r * r + sa * sa) / (2 * sa), Rp = (r * r + sp * sp) / (2 * sp);
     const ya = E.lens_eq_y + sa, yp = E.lens_eq_y - sp;
     const ca = ya - Ra, cp = yp + Rp;
     const aEqA = Math.acos(r / Ra), aEqP = -Math.acos(r / Rp);
     return { back: arc(0, cp, Rp, -Math.PI / 2, aEqP, 40), front: arc(0, ca, Ra, aEqA, Math.PI / 2, 40), Ra, Rp, ca, cp };
   }
-  geo.lens = () => { const a = lensArcs(1); return lathe([...a.back, ...a.front, a.back[0]]); };
-  geo.lens_nucleus = () => { const g = new THREE.SphereGeometry(1, 48, 32); g.scale(3.0, 1.35, 3.0); g.translate(0, E.lens_eq_y - 0.1, 0); return g; };
+  geo.lens = (p) => { const a = lensArcs(1, (p && p.lensThick) || 1); return lathe([...a.back, ...a.front, a.back[0]]); };
+  geo.lens_nucleus = (p) => { const t = (p && p.lensThick) || 1; const g = new THREE.SphereGeometry(1, 48, 32); g.scale(3.0, 1.35 * t, 3.0); g.translate(0, E.lens_eq_y - 0.1, 0); return g; };
+  // Зонулярная (слоистая) врождённая катаракта: мутная оболочка между ядром и корой
+  geo.lamellar = () => { const g = new THREE.SphereGeometry(1, 48, 32); g.scale(3.6, 1.6, 3.6); g.translate(0, E.lens_eq_y - 0.05, 0); return g; };
   // Задняя субкапсулярная бляшка: тонкая чашечка у задней капсулы радиусом rr
   geo.psc = (rr) => {
     const a = lensArcs(1);
@@ -139,10 +157,16 @@ const EyeModel = (() => {
   };
 
   // Макула — тонкое пятно на внутренней поверхности сетчатки у заднего полюса
+  // Макула с фовеальной ямкой: парафовеальный валик утолщён, в центре углубление
   geo.macula = (p) => {
-    const Ro = E.R_ret - 0.02, Ri = E.R_ret - 0.12, r = 1.9;
-    const ao = -Math.PI / 2 + Math.asin(r / Ro), ai = -Math.PI / 2 + Math.asin(r / Ri);
-    const pts = [...arc(0, 0, Ro, -Math.PI / 2, ao, 16), ...arc(0, 0, Ri, ai, -Math.PI / 2, 16)];
+    const Ro = E.R_ret + 0.02, r = 1.9;
+    const ao = -Math.PI / 2 + Math.asin(r / Ro);
+    const pts = [...arc(0, 0, Ro, -Math.PI / 2, ao, 16)];
+    for (let i = 0; i <= 24; i++) {
+      const rr = r * (1 - i / 24);
+      const Ri = (E.R_ret - 0.17) + 0.16 * Math.exp(-(rr / 0.5) * (rr / 0.5));
+      pts.push([rr, -Math.sqrt(Math.max(0, Ri * Ri - rr * rr))]);
+    }
     pts.push(pts[0]);
     return lathe(elongate(pts, p.elong), 64);
   };
@@ -204,11 +228,11 @@ const EyeModel = (() => {
     return shellFromGrid(f(1), f(-1), nu, 6);
   }
 
-  // Веки: оболочки между сферами R и R−t, край миндалевидной формы
-  function lidGeometry(upper) {
+  // Веки: оболочки между сферами R и R−t, край миндалевидной формы; drop — опущение верхнего века (птоз), мм
+  function lidGeometry(upper, drop = 0) {
     const R = 13.7, t = 1.6, half = 11.2;
     const sgn = upper ? -1 : 1; // вверх = −Z
-    const edge = (u) => sgn * (upper ? 4.6 : 3.3) * Math.pow(Math.sin(Math.PI * u), 0.85);
+    const edge = (u) => sgn * ((upper ? 4.6 : 3.3) - (upper ? drop : 0)) * Math.pow(Math.sin(Math.PI * u), 0.85);
     const far = (u) => sgn * (3.0 + (upper ? 7.5 : 6.5) * Math.pow(Math.sin(Math.PI * u), 0.5));
     const onSphere = (Rr) => (u, v) => {
       const x = -half + 2 * half * u, z = edge(u) + (far(u) - edge(u)) * v;
@@ -309,6 +333,71 @@ const EyeModel = (() => {
   // Ориентация цилиндра/трубки вдоль направления
   function orient(obj, dir) { obj.quaternion.setFromUnitVectors(V3(0, 1, 0), dir.clone().normalize()); }
 
+  // ---------- Слёзоотводящие пути (правый глаз, нос = +X) ----------
+  const LACRIMAL = { sac: V3(17.4, 5.4, 2.6), sacAxes: V3(2.1, 2.4, 5.6), ductEnd: V3(18.6, 2.8, 21.5), punctaUp: V3(9.6, 9.4, -1.3), punctaLow: V3(9.6, 9.4, 1.3) };
+  function lacrimalDrainage() {
+    const geos = [];
+    const common = V3(16.2, 6.6, 0.2);
+    geos.push(tube([LACRIMAL.punctaUp, V3(9.9, 9.0, -2.9), V3(12.5, 8.2, -1.6), common], 0.32, 24));
+    geos.push(tube([LACRIMAL.punctaLow, V3(9.9, 9.0, 2.9), V3(12.5, 8.2, 1.8), common], 0.32, 24));
+    geos.push(tube([common, V3(17.0, 6.0, 0.6), LACRIMAL.sac.clone().add(V3(0, 0, -2))], 0.4, 12));
+    const sac = new THREE.SphereGeometry(1, 24, 16); sac.scale(LACRIMAL.sacAxes.x, LACRIMAL.sacAxes.y, LACRIMAL.sacAxes.z); sac.translate(LACRIMAL.sac.x, LACRIMAL.sac.y, LACRIMAL.sac.z);
+    geos.push(sac);
+    geos.push(tube([LACRIMAL.sac.clone().add(V3(0, 0, 4.5)), V3(17.8, 4.4, 11), V3(18.3, 3.4, 16.5), LACRIMAL.ductEnd], 1.05, 32));
+    return mergeGeos(geos);
+  }
+
+  // ---------- Мышца, поднимающая верхнее веко ----------
+  function levator() {
+    const zinn = E.disc_dir.clone().multiplyScalar(36);
+    return ribbon([V3(0, 10.4, -7.8), V3(0.5, 8.8, -12.4), V3(2.0, -2.0, -15.2), V3(6.0, -20, -11.5), zinn.clone().add(V3(1.0, 0, -5.5))], 17, 4, 1.2, 64);
+  }
+
+  // ---------- Костные стенки орбиты: воронка от края орбиты к вершине у зрительного канала ----------
+  function orbitBone() {
+    const rim = V3(0.5, 10.5, 0.5), apex = E.disc_dir.clone().multiplyScalar(38).add(V3(0, 0, 0.5));
+    const radius = (t) => 3.2 + 18.5 * Math.pow(1 - t, 0.85);
+    const surf = (dr) => (u, v) => {
+      const th = 2 * Math.PI * u, c = rim.clone().lerp(apex, v), r = radius(v) + dr;
+      return c.add(V3(Math.cos(th) * r * 1.12, 0, Math.sin(th) * r * 0.95));
+    };
+    return shellFromGrid(surf(0), surf(-1.6), 64, 24);
+  }
+
+  // ---------- Гиалоидный (клокетов) канал: от диска к задней поверхности хрусталика ----------
+  function cloquet() {
+    return tube([E.disc_dir.clone().multiplyScalar(E.R_ret - 0.1), V3(1.2, -5.5, 0.1), V3(0.3, 1.5, 0.05), V3(0, E.lens_eq_y - E.lens_sp - 0.05, 0)], 0.28, 32);
+  }
+
+  // ---------- Детские патологии ----------
+  // Ретинобластома: гроздь узлов, растущая из сетчатки в стекловидное тело (нижне-височный квадрант)
+  function retinoblastomaGeometry(size) {
+    const r = rng(101), geos = [];
+    const c = fundus(-3.0, -3.0, E.R_ret - 0.9 * size);
+    const n = c.clone().normalize();
+    for (let i = 0; i < 6; i++) {
+      const off = V3((r() - 0.5) * 1.2, (r() - 0.5) * 1.2, (r() - 0.5) * 1.2).multiplyScalar(size);
+      const g = new THREE.SphereGeometry(size * (0.55 + 0.45 * r()), 20, 14);
+      const p = c.clone().add(off).sub(n.clone().multiplyScalar(0.2 * size * r()));
+      g.translate(p.x, p.y, p.z); geos.push(g);
+    }
+    return mergeGeos(geos);
+  }
+  // Ретинопатия недоношенных: аваскулярная периферия (височная), демаркационный вал, экстраретинальные сосуды
+  function ropGeometries(stage) {
+    const th0 = Math.PI - 1.15, th1 = Math.PI + 1.15;                      // височный сектор (−X)
+    const phiRidge = (stage >= 3 ? 84 : 92) * DEG, phiOra = 112 * DEG;    // чем тяжелее, тем ближе к центру граница
+    const surf = (R) => (u, v) => sphere_pt(th0 + (th1 - th0) * u, phiRidge + (phiOra - phiRidge) * v, R);
+    const zone = shellFromGrid(surf(E.R_ret - 0.03), surf(E.R_ret - 0.1), 48, 12);
+    const ridgePts = [];
+    for (let i = 0; i <= 40; i++) ridgePts.push(sphere_pt(th0 + (th1 - th0) * i / 40, phiRidge, E.R_ret - (stage >= 2 ? 0.28 : 0.12)));
+    const ridge = tube(ridgePts, stage >= 2 ? 0.32 : 0.12, 60);
+    const tuftPts = [];
+    if (stage >= 3) for (let i = 0; i < 14; i++) tuftPts.push(sphere_pt(th0 + (th1 - th0) * (0.05 + 0.9 * i / 13), phiRidge - 1.5 * DEG, E.R_ret - 0.55));
+    return { zone, ridge, tuftPts };
+  }
+  const sphere_pt = (theta, phi, R) => V3(R * Math.sin(phi) * Math.cos(theta), -R * Math.cos(phi), R * Math.sin(phi) * Math.sin(theta));
+
   // ---------- Сборка ----------
   // materialFactory(struct) → THREE.Material; возвращает описание мешей
   function build(materialFor, params) {
@@ -332,10 +421,15 @@ const EyeModel = (() => {
     add('iris', geo.iris(params));
     add('ciliary', geo.ciliary());
     add('zonule', geo.zonule());
-    add('lens', geo.lens());
-    add('lens_nucleus', geo.lens_nucleus());
+    add('lens', geo.lens(params));
+    add('lens_nucleus', geo.lens_nucleus(params));
     add('vitreous', geo.vitreous(params));
     add('anterior_chamber', geo.anterior_chamber());
+    add('posterior_chamber', geo.posterior_chamber());
+    add('trabecular', geo.trabecular());
+    add('schlemm', geo.schlemm(), { noCap: true });
+    add('rpe', geo.rpe(params));
+    add('cloquet', cloquet(), { noCap: true });
     add('disc', geo.disc(params), { position: D.clone().multiplyScalar(E.R_ret + 0.02 + (params.elong || 0)), dir: D });
 
     // Зрительный нерв и оболочки: от склеры назад на 27 мм
@@ -360,11 +454,14 @@ const EyeModel = (() => {
     add('oblique_sup', ribbon([V3(-5.8, -4.0, -9.3), V3(1.5, 3.0, -11.4), V3(10.0, 9.0, -14.0), V3(9.0, -12, -11), zinn.clone().add(V3(1.5, 0, -3.0))], 6, 4, 1.3, 64));
     add('oblique_inf', ribbon([V3(-7.0, -5.3, 7.6), V3(2.0, 2.5, 11.6), V3(10.0, 7.0, 13.0)], 6, 5, 1.3, 40));
 
-    // Придаточный аппарат
-    add('lid_upper', lidGeometry(true));
+    // Придаточный аппарат и орбита
+    add('lid_upper', lidGeometry(true, params.ptosis || 0));
     add('lid_lower', lidGeometry(false));
     const lac = new THREE.SphereGeometry(1, 32, 24); lac.scale(4.0, 2.2, 3.0);
     add('lacrimal', lac, { position: V3(-9.5, 3.5, -9.5) });
+    add('lacrimal_drainage', lacrimalDrainage());
+    add('levator', levator());
+    add('orbit_bone', orbitBone());
 
     // ---- Сосуды ----
     const vesselOpts = { noCap: true };
@@ -435,7 +532,9 @@ const EyeModel = (() => {
     conjunctiva: V3(-8.5, 7.2, 3.5), trochlea: V3(10.8, 9.5, -14.5),
     rectus_sup: V3(0, -2, -12.6), rectus_inf: V3(0, -2, 12.6), rectus_med: V3(12.6, -2, 0), rectus_lat: V3(-12.6, -2, 0), oblique_sup: V3(4, 6, -12.5), oblique_inf: V3(4, 5, 12.5),
     lid_upper: V3(0, 8.5, -10.5), lid_lower: V3(0, 9.0, 8.5), lacrimal: V3(-9.5, 3.5, -12),
+    trabecular: V3(6.3, 9.4, 1.2), schlemm: V3(-6.4, 9.2, 1.2), posterior_chamber: V3(-4.6, 8.3, 1.4), rpe: V3(7.6, -7.6, 1.2), cloquet: V3(0.5, -1.5, 0.8),
+    levator: V3(1, 3, -15.5), lacrimal_drainage: V3(17.6, 5.4, 4), orbit_bone: V3(-19, -6, -10),
   };
 
-  return { E, geo, build, LABELS, fundus, setFundusElong, rng, tube, mergeGeos, retinalTree, treeSamplePoints, detachmentGeometries, orient, shellFromGrid, lensArcs };
+  return { E, geo, build, LABELS, LACRIMAL, fundus, setFundusElong, rng, tube, mergeGeos, retinalTree, treeSamplePoints, detachmentGeometries, orient, shellFromGrid, lensArcs, lidGeometry, retinoblastomaGeometry, ropGeometries, sphere_pt };
 })();
