@@ -127,6 +127,14 @@
   .callout:hover { border-color: var(--accent); }
   .callout.behind { display: none; }
   .callout.patho { border-color: #d98a1f; }
+  .callout.surg { border-color: #2f9e6e; }
+  #callouts path.surg, #callouts circle.surg { stroke: #2f9e6e; }
+  #callouts circle.dot.surg { fill: #2f9e6e; }
+  .marker.post { background: #2f9e6e; }
+  .marker.post::before { background: #2f9e6e; }
+  .cond-body p.treat { background: rgba(47,158,110,.12); border-left: 3px solid #2f9e6e; padding: 6px 8px; border-radius: 6px; font-size: 12.5px; }
+  .cond-body .ba.on { background: #2f9e6e; color: #fff; border-color: #2f9e6e; }
+  #normLegend .sw.post { background: #2f9e6e; }
   #callouts path.patho, #callouts circle.patho { stroke: #d98a1f; }
   #callouts circle.dot.patho { fill: #d98a1f; }
   #normLegend { position: absolute; left: 10px; top: 10px; z-index: 2; font-size: 11.5px; color: var(--text); background: var(--panel); border: 1px solid var(--line); padding: 4px 8px; border-radius: 6px; opacity: .92; pointer-events: none; display: flex; gap: 6px; align-items: center; }
@@ -241,7 +249,7 @@
     <div id="labels"></div>
     <svg id="callouts"></svg>
     <div id="calloutBoxes"></div>
-    <div id="normLegend" hidden><span class="sw norm"></span> норма <span class="sw chg"></span> изменено <span class="sw el"></span> элементы патологии</div>
+    <div id="normLegend" hidden><span class="sw norm"></span> норма <span class="sw chg"></span> изменено <span class="sw el"></span> элементы патологии <span class="sw post"></span> после лечения</div>
     <div id="hint">Вращение — левая кнопка, сдвиг — правая, масштаб — колесо. Клик по структуре — описание.</div>
     <div id="axisHint">Нос → справа · Висок ← слева</div>
   </main>

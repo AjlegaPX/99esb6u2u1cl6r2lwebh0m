@@ -100,7 +100,7 @@
     return cap;
   }
 
-  const params = { elong: 0, cone: 0, cdr: 0.3, bombe: 0, pupil: E.pupil, limbScale: 1, lensThick: 1, ptosis: 0, physHyper: 0, atrophy: 0, astig: 0, astigAxis: 0, cyl: 0 };
+  const params = { elong: 0, cone: 0, cdr: 0.3, bombe: 0, pupil: E.pupil, limbScale: 1, lensThick: 1, ptosis: 0, physHyper: 0, atrophy: 0, astig: 0, astigAxis: 0, cyl: 0, ablation: 0, corrected: false };
   const meshes = EyeModel.build((id, opts) => baseMaterial(byId[id], opts), params);
   const structureMeshes = [];
   STRUCTURES.forEach(def => {
@@ -112,7 +112,7 @@
       mesh.name = id; mesh.userData.id = id; if (noCap) mesh.userData.noCap = true;
     }
     (isGlobe(def) ? globeLocal : eyeGroup).add(mesh);
-    const entry = { def, mesh, detail: null, useDetail: true, visible: true, focusHidden: false, stencils: [], cap: null, order: -1, baseOpacity: def.opacity };
+    const entry = { def, mesh, detail: null, useDetail: true, visible: true, focusHidden: false, surgHidden: false, stencils: [], cap: null, order: -1, baseOpacity: def.opacity };
     if (!mesh.userData.noCap) {
       entry.order = orderCounter; orderCounter += 2;
       entry.stencils = makeStencil(mesh, entry.order);
@@ -129,7 +129,7 @@
 
   // Детализированные меши из Blender
   function refreshVisibility(e) {
-    const useD = !!e.detail && e.useDetail, shown = e.visible && !e.focusHidden;
+    const useD = !!e.detail && e.useDetail, shown = e.visible && !e.focusHidden && !e.surgHidden;
     e.mesh.visible = shown && !useD;
     if (e.detail) e.detail.visible = shown && useD;
     if (e.cap) e.cap.visible = shown && clip.on;
@@ -204,8 +204,9 @@
   for (let i = 0; i < 7; i++) { const l = new THREE.Line(new THREE.BufferGeometry(), rayMatV); l.visible = false; raysGroup.add(l); rayLinesV.push(l); }
   const focusDotV = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 8), new THREE.MeshBasicMaterial({ color: 0xff9a3d })); focusDotV.visible = false; raysGroup.add(focusDotV);
   function updateRays() {
-    const yF = -E.R_ret - (cond.ametropia.on ? 0 : params.physHyper * 0.35), yRet = -E.R_ret - params.elong;
-    const yF2 = yF + params.cyl * 0.35; // при астигматизме второй меридиан фокусируется раньше: две фокальные линии
+    const yRet = -E.R_ret - params.elong;
+    const yF = params.corrected ? yRet : -E.R_ret - (cond.ametropia.on ? 0 : params.physHyper * 0.35);
+    const yF2 = params.corrected ? yRet : yF + params.cyl * 0.35; // при астигматизме второй меридиан фокусируется раньше: две фокальные линии
     focusDot.position.set(0, yF, 0); focusDotV.position.set(0, yF2, 0); focusDotV.visible = params.cyl > 0;
     const a = EyeModel.lensArcs(1, params.lensThick);
     const build = (line, x, focusY, horizontal) => {
@@ -283,11 +284,11 @@
   const normGroup = new THREE.Group(); eyeGroup.add(normGroup);
   const normMat = new THREE.MeshStandardMaterial({ color: 0x1fb6ff, emissive: 0x0b4d6e, transparent: true, opacity: 0.34, depthWrite: false, side: THREE.DoubleSide, clippingPlanes: [clipPlane], roughness: 0.4 });
   const normGhosts = {};
-  const NORM_DEPS = { sclera: ['elong', 'limbScale', 'angle', 'g'], cornea: ['cone', 'limbScale', 'angle', 'g', 'astig'], choroid: ['elong', 'g'], retina: ['elong', 'g'], vitreous: ['elong'], macula: ['elong'], iris: ['bombe', 'angle'], anterior_chamber: ['bombe'], disc: ['cdr', 'elong'], optic_nerve: ['atrophy', 'elong'], lid_upper: ['ptosis'] };
+  const NORM_DEPS = { sclera: ['elong', 'limbScale', 'angle', 'g'], cornea: ['cone', 'limbScale', 'angle', 'g', 'astig', 'ablation'], choroid: ['elong', 'g'], retina: ['elong', 'g'], vitreous: ['elong'], macula: ['elong'], iris: ['bombe', 'angle'], anterior_chamber: ['bombe'], disc: ['cdr', 'elong'], optic_nerve: ['atrophy', 'elong'], lid_upper: ['ptosis'] };
   const NORM_BUILD = { sclera: p => EyeModel.geo.sclera(p), cornea: p => EyeModel.geo.cornea(p), choroid: p => EyeModel.geo.choroid(p), retina: p => EyeModel.geo.retina(p), vitreous: p => EyeModel.geo.vitreous(p), macula: p => EyeModel.geo.macula(p), iris: p => EyeModel.geo.iris(p), anterior_chamber: p => EyeModel.geo.anterior_chamber(p), disc: p => EyeModel.geo.disc(p), optic_nerve: p => EyeModel.geo.optic_nerve(p), lid_upper: () => EyeModel.lidGeometry(true, 0) };
   let normKey = '';
   function updateNormGhosts(ap, extra) {
-    const np = { elong: 0, cone: 0, cdr: 0.3, bombe: 0, pupil: ap.pupil, limbScale: ap.limb, lensThick: ap.lensThick, ptosis: 0, atrophy: 0, angle: 0, g: 1, astig: 0, astigAxis: 0 };
+    const np = { elong: 0, cone: 0, cdr: 0.3, bombe: 0, pupil: ap.pupil, limbScale: ap.limb, lensThick: ap.lensThick, ptosis: 0, atrophy: 0, angle: 0, g: 1, astig: 0, astigAxis: 0, ablation: 0 };
     const cur = Object.assign({}, params, extra);
     const changed = Object.keys(NORM_DEPS).filter(id => S[id] && S[id].visible && NORM_DEPS[id].some(k => Math.abs((cur[k] || 0) - (np[k] || 0)) > 1e-6));
     const key = changed.join(',') + '|' + JSON.stringify(np);
@@ -306,6 +307,71 @@
 
   const fundus = EyeModel.fundus;
   const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3();
+
+  // ---------- Хирургические элементы (схематично) ----------
+  const surg = {};
+  const smat = (color, opacity, extra = {}) => new THREE.MeshStandardMaterial(Object.assign({ color, roughness: 0.4, metalness: 0.1, transparent: opacity < 1, opacity, clippingPlanes: [clipPlane], side: THREE.DoubleSide }, extra));
+  function addSurg(id, geometry, material, parent = globeLocal, count) {
+    const m = count ? new THREE.InstancedMesh(geometry, material, count) : new THREE.Mesh(geometry, material);
+    m.visible = false; m.renderOrder = 1250; m.userData.surg = id; parent.add(m); surg[id] = m; return m;
+  }
+  const iolG = EyeModel.SURG.iol();
+  addSurg('iol', iolG.optic, smat(0xeaf6ff, 0.55, { roughness: 0.1 }));
+  addSurg('iolHaptics', iolG.haptics, smat(0x9fc4ff, 1));
+  addSurg('icl', EyeModel.SURG.icl(), smat(0xcfe6ff, 0.5, { roughness: 0.1 }));
+  addSurg('spectacle', EyeModel.SURG.spectacle(), smat(0xbfe0ff, 0.3, { roughness: 0.05 }), eyeGroup);
+  addSurg('buckle', EyeModel.SURG.buckle(), smat(0xd9d2c4, 1));
+  addSurg('bleb', EyeModel.SURG.bleb(), smat(0xe6f2f8, 0.6, { roughness: 0.2 }));
+  addSurg('shunt', EyeModel.SURG.shunt(), smat(0xf2f2f2, 1));
+  addSurg('iridotomy', EyeModel.SURG.iridotomy(), smat(0x111111, 1));
+  addSurg('graft', EyeModel.SURG.graft(), smat(0x1b1b3a, 1));
+  addSurg('icrs', EyeModel.SURG.icrs(), smat(0xd0e8ff, 0.9, { roughness: 0.1 }));
+  const syr = EyeModel.SURG.syringe();
+  addSurg('syringeNeedle', syr.needle, smat(0xc9c9c9, 1, { metalness: 0.6, roughness: 0.3 }), eyeGroup);
+  addSurg('syringe', syr.body, smat(0xf7f7f7, 0.9), eyeGroup);
+  addSurg('probe', EyeModel.SURG.probe(), smat(0xc0c0c0, 1, { metalness: 0.6, roughness: 0.3 }), eyeGroup);
+  addSurg('gasBubble', EyeModel.SURG.gasBubble(), smat(0xdff2ff, 0.45, { roughness: 0.05 }));
+  addSurg('laserSpots', new THREE.CircleGeometry(0.26, 12), smat(0xe9dcc0, 1), globeLocal, 420);
+  addSurg('sltSpots', new THREE.SphereGeometry(0.12, 8, 6), smat(0xfff2b0, 1, { emissive: 0x554400 }), globeLocal, 48);
+  addSurg('sutures', new THREE.SphereGeometry(0.22, 8, 6), smat(0x2a2a4a, 1), globeLocal, 3);
+  addSurg('suturesLid', new THREE.SphereGeometry(0.22, 8, 6), smat(0x2a2a4a, 1), eyeGroup, 3);
+  const surgMeshes = Object.values(surg);
+  function placeSpots(inst, pts) {
+    const n = Math.min(pts.length, inst.instanceMatrix.count);
+    for (let i = 0; i < n; i++) { const p = pts[i], nrm = p.clone().normalize(); _q.setFromUnitVectors(V3(0, 0, 1), nrm.negate()); _s.set(1, 1, 1); _m.compose(p, _q, _s); inst.setMatrixAt(i, _m); }
+    inst.count = n; inst.instanceMatrix.needsUpdate = true; inst.visible = n > 0;
+  }
+  function placeSpheres(inst, pts) { pts.forEach((p, i) => { _q.identity(); _s.set(1, 1, 1); _m.compose(p, _q, _s); inst.setMatrixAt(i, _m); }); inst.count = pts.length; inst.instanceMatrix.needsUpdate = true; }
+  placeSpheres(surg.sltSpots, EyeModel.SURG.sltSpots());
+  placeSpheres(surg.sutures, EyeModel.SURG.suturePoints('strab'));
+  placeSpheres(surg.suturesLid, EyeModel.SURG.suturePoints('ptosis'));
+  // Лечение: выбранный вариант по каждому состоянию
+  const treat = {}; CONDITIONS.forEach(c => treat[c.id] = { id: null, last: null });
+  function activeTreatment(condId) {
+    const t = treat[condId]; if (!t || !cond[condId].on || !t.id) return null;
+    const tr = (TREATMENTS[condId] || []).find(x => x.id === t.id); if (!tr) return null;
+    const c = condById[condId];
+    if (tr.forType && c.options && cond[condId][c.options.id] !== tr.forType) return null;
+    return tr;
+  }
+  const TX = (id) => (activeTreatment(id) || {}).effects || {};
+  const TREAT_VIEWS = {
+    bleb: { pos: [-6, 24, 26], target: [0, 6, 6] }, shunt: { pos: [-30, 20, 22], target: [-4, 1, 2] }, buckle: { pos: [-34, 10, 14], target: [0, 0, -2], clip: { on: true, axis: 'h', offset: 0, flip: false } },
+    syringe: { pos: [-32, 26, 20], target: [-6, 4, -2], clip: { on: false } }, probe: { pos: [26, 16, 42], target: [15, -3, 6], clip: { on: false } }, spectacle: { pos: [-38, 10, 30], target: [0, 0, 12], clip: { on: false } },
+    graft: { pos: [-16, 12, 28], target: [0, 0, 10], clip: { on: false } }, icrs: { pos: [-16, 12, 28], target: [0, 0, 10], clip: { on: false } }, gasBubble: { pos: [-32, 12, 6], target: [0, 0, -2], clip: { on: true, axis: 'h', offset: 0, flip: false } },
+    iridotomy: { pos: [-8, 18, 24], target: [0, 4, 8], clip: { on: false } }, sltSpots: { pos: [-14, 9, 17], target: [5.6, 0, 9], clip: { on: true, axis: 'h', offset: 0, flip: false } },
+    sutures: { pos: [-8, 22, 30], target: [8, 0, 6], clip: { on: false } }, icl: { pos: [7, 12, 26], target: [0, -0.5, 7.5], clip: { on: true, axis: 'h', offset: 0, flip: false } },
+    laserSpots: { pos: [0.5, 0, 6], target: [0.3, 0, -10], clip: { on: false } },
+  };
+  function surgAnchor(el) {
+    const id = el === 'sutures' ? (surg.suturesLid.visible ? 'suturesLid' : 'sutures') : el;
+    const m = surg[id];
+    if (!m) { const lab = labels[el === 'cxl' ? 'cornea' : 'sclera']; return lab ? lab.getWorldPosition(new THREE.Vector3()) : null; }
+    if (!m.visible) return null;
+    if (m.isInstancedMesh) { if (!m.count) return null; const mat = new THREE.Matrix4(); m.getMatrixAt(Math.floor(m.count / 2), mat); return m.localToWorld(new THREE.Vector3().setFromMatrixPosition(mat)); }
+    if (!m.geometry.boundingSphere) m.geometry.computeBoundingSphere();
+    return m.localToWorld(m.geometry.boundingSphere.center.clone());
+  }
   function placeOnFundus(inst, i, u, v, R, sx, sy, rot) {
     _p.copy(fundus(u, v, R));
     const n = _p.clone().normalize();
@@ -383,8 +449,9 @@
     markerDiv.style.display = markerObj.visible ? '' : 'none';
     if (v && v.marker) {
       markerObj.position.set(...v.marker); if (focus.cond === 'ametropia') markerObj.position.y -= params.elong;
-      const c = condById[focus.cond], p = c.params[0];
-      markerDiv.textContent = (v.short || c.name) + (p ? ' · ' + fmt(cond[c.id][p.id], p) : '');
+      const c = condById[focus.cond], p = c.params[0], tr = activeTreatment(c.id);
+      markerDiv.textContent = (v.short || c.name) + (p ? ' · ' + fmt(cond[c.id][p.id], p) : '') + (tr ? ' · после лечения' : '');
+      markerDiv.classList.toggle('post', !!tr);
     }
   }
 
@@ -439,29 +506,45 @@
   function applyConditions() {
     const c = cond;
     const ap = ageParams();
+    const tx = {}; CONDITIONS.forEach(x => tx[x.id] = TX(x.id)); // эффекты выбранного лечения
     // --- геометрические параметры ---
     const cg = c.congenital_glaucoma.on ? c.congenital_glaucoma.severity / 100 : 0;
     params.elong = c.ametropia.on ? -c.ametropia.diopters * 0.35 : 0;
-    params.cone = c.keratoconus.on ? c.keratoconus.severity / 100 : 0;
+    params.cone = (c.keratoconus.on ? c.keratoconus.severity / 100 : 0) * (tx.keratoconus.coneScale !== undefined ? tx.keratoconus.coneScale : 1);
     params.cdr = c.glaucoma.on ? c.glaucoma.cdr : (cg ? 0.3 + 0.55 * cg : 0.3);
-    params.bombe = (c.glaucoma.on && c.glaucoma.type === 'closed') ? 0.55 : 0;
+    params.bombe = (c.glaucoma.on && c.glaucoma.type === 'closed' && !tx.glaucoma.bombeZero) ? 0.55 : 0;
     params.pupil = ap.pupil;
     params.limbScale = ap.limb * (1 + 0.3 * cg);
     params.lensThick = ap.lensThick;
-    params.ptosis = c.ptosis.on ? c.ptosis.drop : 0;
+    params.ptosis = c.ptosis.on ? c.ptosis.drop * (1 - (tx.ptosis.dropFix || 0)) : 0;
     params.physHyper = ap.hyper;
     params.atrophy = c.glaucoma.on ? Math.min(1, (c.glaucoma.cdr - 0.3) / 0.65) : cg * 0.6; // истончение зрительного нерва
     params.cyl = c.astigmatism.on ? c.astigmatism.cyl : 0;
-    params.astig = params.cyl * 0.06; params.astigAxis = c.astigmatism.on ? c.astigmatism.axis : 0; // преувеличено ради наглядности
+    params.astig = tx.astigmatism.astigZero ? 0 : params.cyl * 0.06; params.astigAxis = c.astigmatism.on ? c.astigmatism.axis : 0; // преувеличено ради наглядности
+    params.ablation = tx.ametropia.ablation ? -c.ametropia.diopters * 0.03 : 0; // лазерная коррекция: уплощение центра (преувеличено)
+    params.corrected = !!(tx.ametropia.corrected || tx.astigmatism.corrected);
+    // ИОЛ вместо хрусталика; витрэктомия убирает стекловидное тело
+    const iolOn = !!(tx.cataract.iol || tx.congenital_cataract.iol || tx.ametropia.iol || tx.astigmatism.iol);
+    [S.lens, S.lens_nucleus].forEach(e => { if (e.surgHidden !== iolOn) { e.surgHidden = iolOn; refreshVisibility(e); } });
+    const vitGone = !!(tx.detachment.vitreousGone || tx.diabetic.vitreousGone);
+    if (S.vitreous.surgHidden !== vitGone) { S.vitreous.surgHidden = vitGone; refreshVisibility(S.vitreous); }
+    surg.iol.visible = iolOn; surg.iolHaptics.visible = iolOn;
+    surg.icl.visible = !!tx.ametropia.icl; surg.spectacle.visible = !!tx.astigmatism.spectacle;
+    surg.bleb.visible = !!tx.glaucoma.bleb; surg.shunt.visible = !!tx.glaucoma.shunt; surg.iridotomy.visible = !!tx.glaucoma.iridotomy; surg.sltSpots.visible = !!tx.glaucoma.sltSpots;
+    surg.graft.visible = !!tx.keratoconus.graft; surg.icrs.visible = !!tx.keratoconus.icrs;
+    const syrOn = !!(tx.amd.syringe || tx.diabetic.syringe || tx.crvo.syringe || tx.rop.syringe);
+    surg.syringe.visible = syrOn; surg.syringeNeedle.visible = syrOn;
+    surg.probe.visible = !!tx.nld_obstruction.probe; surg.gasBubble.visible = !!tx.detachment.gas; surg.buckle.visible = !!tx.detachment.buckle;
+    surg.sutures.visible = tx.strabismus.sutures === 'strab'; surg.suturesLid.visible = tx.ptosis.sutures === 'ptosis';
     // масштаб: возраст — весь глаз с орбитой, буфтальм — только яблоко
     eyeGroup.scale.setScalar(ap.s); detailGroup.scale.setScalar(ap.s);
     const g = 1 + 0.22 * cg; globeLocal.scale.setScalar(g); globeWorld.scale.setScalar(g);
     ghostGroup.visible = isChild(); // контур взрослого глаза для сравнения с детским
     // косоглазие: поворот яблока вокруг вертикальной оси; медиальная и латеральная мышцы напрягаются/растягиваются
-    const angle = c.strabismus.on ? c.strabismus.angle * DEG : 0;
+    const angle = c.strabismus.on && !tx.strabismus.angleZero ? c.strabismus.angle * DEG : 0;
     globeLocal.rotation.z = -angle; globeWorld.rotation.y = angle;
     gazeGroup.visible = c.strabismus.on; visualAxis.visible = c.strabismus.on;
-    const sk = c.strabismus.on ? c.strabismus.angle / 30 : 0;
+    const sk = c.strabismus.on && !tx.strabismus.angleZero ? c.strabismus.angle / 30 : 0;
     const tight = new THREE.Color(0x7e1f1e), slack = new THREE.Color(0xdcaaa6);
     S.rectus_med.mesh.material.color.setHex(byId.rectus_med.color).lerp(sk > 0 ? tight : slack, Math.abs(sk));
     S.rectus_lat.mesh.material.color.setHex(byId.rectus_lat.color).lerp(sk > 0 ? slack : tight, Math.abs(sk));
@@ -476,7 +559,7 @@
     setDetailUse('lid_upper', params.ptosis === 0);
     setDetailUse('optic_nerve', params.elong === 0 && params.atrophy === 0);
     setDetailUse('nerve_sheath', params.elong === 0);
-    const key = [params.elong, params.cone, params.cdr, params.bombe, params.pupil, params.limbScale, params.lensThick, params.ptosis, params.atrophy, params.astig, params.astigAxis].join('|');
+    const key = [params.elong, params.cone, params.cdr, params.bombe, params.pupil, params.limbScale, params.lensThick, params.ptosis, params.atrophy, params.astig, params.astigAxis, params.ablation, params.corrected].join('|');
     if (key !== lastGeoKey) {
       const prev = lastGeoKey.split('|');
       const elongChanged = prev[0] !== String(params.elong);
@@ -503,28 +586,29 @@
     }
     // --- глаукома и врождённая глаукома ---
     const gk = c.glaucoma.on ? Math.min(1, (c.glaucoma.cdr - 0.3) / 0.65) : cg * 0.6;
-    const kIop = c.glaucoma.on ? Math.max(0, Math.min(1, (c.glaucoma.iop - 21) / 24)) : 0;
+    const iopFixed = !!tx.glaucoma.iopNormal, cgT = cg * (1 - (tx.congenital_glaucoma.hazeReduce || 0));
+    const kIop = c.glaucoma.on && !iopFixed ? Math.max(0, Math.min(1, (c.glaucoma.iop - 21) / 24)) : 0;
     const closed = c.glaucoma.on && c.glaucoma.type === 'closed';
-    const attack = closed ? Math.max(0, Math.min(1, (c.glaucoma.iop - 28) / 15)) : 0; // острый приступ
+    const attack = closed && !iopFixed ? Math.max(0, Math.min(1, (c.glaucoma.iop - 28) / 15)) : 0; // острый приступ
     S.optic_nerve.mesh.material.color.copy(nerveBase).lerp(nervePale, Math.min(1, gk * 1.1));
     S.disc.mesh.material.color.setHex(byId.disc.color).lerp(new THREE.Color(0xf5e2cf), gk * 0.7);
     // трабекула и шлеммов канал засоряются с ростом ВГД (открытоугольная форма), недоразвиты при врождённой глаукоме
-    S.trabecular.mesh.material.color.setHex(byId.trabecular.color).lerp(new THREE.Color(0x7f5b3c), closed ? 0 : kIop).lerp(new THREE.Color(0x9aa0a8), cg);
+    S.trabecular.mesh.material.color.setHex(byId.trabecular.color).lerp(new THREE.Color(0x7f5b3c), closed ? 0 : kIop).lerp(new THREE.Color(0x9aa0a8), cgT);
     S.trabecular.cap.material.color.copy(S.trabecular.mesh.material.color).multiplyScalar(0.85);
     S.schlemm.mesh.material.color.setHex(byId.schlemm.color).lerp(new THREE.Color(0x24285a), closed ? 0 : kIop);
     // решётчатая пластинка прогибается назад под давлением
-    if (S.lamina_cribrosa.detail) S.lamina_cribrosa.detail.position.set(0.259, 0, -0.966).multiplyScalar(0.5 * Math.max(kIop, gk * 0.6));
-    // роговица отекает при врождённой глаукоме и остром приступе; склера краснеет при приступе
-    const haze = Math.max(cg * 0.9, attack * 0.8);
+    if (S.lamina_cribrosa.detail) S.lamina_cribrosa.detail.position.set(0.259, 0, -0.966).multiplyScalar(0.5 * Math.max(kIop, iopFixed ? 0 : gk * 0.6));
+    // роговица отекает при врождённой глаукоме и остром приступе; склера краснеет при приступе; кросслинкинг подкрашивает строму
+    const haze = Math.max(cgT * 0.9, attack * 0.8);
     const corneaM = S.cornea.mesh.material;
-    corneaM.color.copy(corneaBase).lerp(corneaHaze, haze);
+    corneaM.color.copy(corneaBase).lerp(corneaHaze, haze).lerp(new THREE.Color(0xd4ecb8), tx.keratoconus.cxl ? 0.45 : 0);
     S.cornea.baseOpacity = byId.cornea.opacity + 0.5 * haze;
     S.sclera.mesh.material.color.setHex(byId.sclera.color).lerp(new THREE.Color(0xefcfc8), attack);
     S.sclera.cap.material.color.copy(S.sclera.mesh.material.color).multiplyScalar(0.85);
 
     // --- катаракта взрослая и врождённая ---
-    const cat = c.cataract.on ? c.cataract.severity / 100 : 0, ct = c.cataract.type;
-    const cc = c.congenital_cataract.on ? c.congenital_cataract.severity / 100 : 0, cct = c.congenital_cataract.type;
+    const cat = c.cataract.on && !tx.cataract.iol ? c.cataract.severity / 100 : 0, ct = c.cataract.type;
+    const cc = c.congenital_cataract.on && !tx.congenital_cataract.iol ? c.congenital_cataract.severity / 100 : 0, cct = c.congenital_cataract.type;
     const lensM = S.lens.mesh.material, nucM = S.lens_nucleus.mesh.material;
     lensM.color.copy(lensBase).lerp(lensYellow, cat * (ct === 'nuclear' ? 0.9 : 0.35));
     if (cc && cct === 'total') lensM.color.lerp(lensWhite, cc);
@@ -551,19 +635,19 @@
     patho.psc.visible = pscOn;
 
     // --- ретинобластома ---
-    const rb = c.retinoblastoma.on ? c.retinoblastoma.severity / 100 : 0;
-    const rbk = rb.toFixed(2);
-    if (rbk !== lastRbKey) { lastRbKey = rbk; if (rb > 0) { patho.rbMass.geometry.dispose(); patho.rbMass.geometry = EyeModel.retinoblastomaGeometry(0.5 + 2.2 * rb); } }
-    patho.rbMass.visible = rb > 0;
+    const rb = c.retinoblastoma.on ? c.retinoblastoma.severity / 100 : 0, rbShrink = tx.retinoblastoma.tumorShrink || 1;
+    const rbk = rb.toFixed(2) + '|' + rbShrink;
+    if (rbk !== lastRbKey) { lastRbKey = rbk; if (rb > 0) { patho.rbMass.geometry.dispose(); patho.rbMass.geometry = EyeModel.retinoblastomaGeometry((0.5 + 2.2 * rb) * rbShrink); } }
+    patho.rbMass.visible = rb > 0; patho.rbMass.material.color.setHex(rbShrink < 1 ? 0xd9d4c4 : 0xf3efd8);
     const nCalc = rb > 0.2 ? Math.min(Math.round(rb * 24), PTS.calc.length) : 0;
-    if (nCalc) { const size = 0.5 + 2.2 * rb, cc0 = fundus(-3, -3, E.R_ret - 0.9 * size); for (let i = 0; i < nCalc; i++) { const p = PTS.calc[i]; placeSphere(patho.rbCalc, i, cc0.clone().add(V3((p[0]) * size * 0.9, (p[1]) * size * 0.9, (p[2] - 0.5) * size * 1.2)), 0.6 + p[2]); } }
+    if (nCalc) { const size = (0.5 + 2.2 * rb) * rbShrink, cc0 = fundus(-3, -3, E.R_ret - 0.9 * size); for (let i = 0; i < nCalc; i++) { const p = PTS.calc[i]; placeSphere(patho.rbCalc, i, cc0.clone().add(V3((p[0]) * size * 0.9, (p[1]) * size * 0.9, (p[2] - 0.5) * size * 1.2)), 0.6 + p[2]); } }
     commit(patho.rbCalc, nCalc);
     // отсевы опухоли в стекловидное тело при большом размере
-    const nSeed = rb > 0.5 ? Math.min(Math.round((rb - 0.5) * 40), PTS.seeds.length) : 0;
+    const nSeed = rb > 0.5 && !tx.retinoblastoma.seedsGone ? Math.min(Math.round((rb - 0.5) * 40), PTS.seeds.length) : 0;
     if (nSeed) { const size = 0.5 + 2.2 * rb, c0 = fundus(-3, -3, E.R_ret - 0.9 * size); for (let i = 0; i < nSeed; i++) { const p = PTS.seeds[i]; placeSphere(patho.rbSeeds, i, c0.clone().multiplyScalar(0.85 - 0.55 * p[2]).add(V3(p[0] * 3, p[1] * 3, (p[2] - 0.5) * 4)), 0.5 + p[2]); } }
     commit(patho.rbSeeds, nSeed);
     // лейкокория: белый зрачок при плотной катаракте или крупной опухоли
-    patho.leukocoria.visible = (cc > 0.5 && cct !== 'nuclear') || rb > 0.35;
+    patho.leukocoria.visible = (cc > 0.5 && cct !== 'nuclear') || (rb > 0.35 && rbShrink === 1);
     patho.leukocoria.material.opacity = Math.min(0.97, 0.5 + Math.max(cc, rb) * 0.5);
 
     // --- ретинопатия недоношенных ---
@@ -578,11 +662,13 @@
         g2.tuftPts.forEach((p, i) => placeSphere(patho.ropTufts, i, p, 1)); commit(patho.ropTufts, g2.tuftPts.length);
       } else commit(patho.ropTufts, 0);
     }
-    patho.ropZone.visible = ropStage > 0; patho.ropRidge.visible = ropStage > 0;
+    const ropTreated = !!tx.rop.ropRegress;
+    patho.ropZone.visible = ropStage > 0; patho.ropRidge.visible = ropStage > 0 && !ropTreated;
+    if (ropTreated) commit(patho.ropTufts, 0);
 
     // --- отслойка (взрослая и как стадии 4–5 РН) ---
-    const det = c.detachment.on ? c.detachment.extent / 100 : 0;
-    const lift = Math.max(det > 0 ? 0.4 + 3.0 * det : 0, ropStage >= 4 ? (ropStage === 4 ? 2.2 : 3.6) : 0);
+    const det = c.detachment.on && !tx.detachment.reattach ? c.detachment.extent / 100 : 0;
+    const lift = Math.max(det > 0 ? 0.4 + 3.0 * det : 0, ropStage >= 4 && !ropTreated ? (ropStage === 4 ? 2.2 : 3.6) : 0);
     const dk = lift.toFixed(2);
     if (dk !== lastDetachKey) {
       lastDetachKey = dk;
@@ -601,25 +687,25 @@
     const nDr = Math.min(Math.round(amd * (wet ? 30 : 80)), PTS.drusen.length, patho.drusen.instanceMatrix.count);
     for (let i = 0; i < nDr; i++) { const p = PTS.drusen[i]; placeSphere(patho.drusen, i, fundus(p[0], p[1], E.R_ret - 0.03), 0.6 + p[2] * 0.9); }
     commit(patho.drusen, nDr);
-    if (wet && amd > 0) {
+    if (wet && amd > 0 && !tx.amd.cnvGone) {
       patho.cnv.geometry.dispose(); patho.cnv.geometry = tangleGeometry(0.2, -0.1, 1.2 + 1.6 * amd, E.R_ret + 0.08, 5, 4 + Math.round(amd * 6), 0.06);
       placeOnFundus(patho.cnvBlood, 0, 0.4, -0.3, E.R_ret - 0.06, 0.5 + 1.6 * amd, 0.4 + 1.2 * amd, 0.4); commit(patho.cnvBlood, 1);
       patho.cnv.visible = true;
     } else { patho.cnv.visible = false; commit(patho.cnvBlood, 0); }
 
     // --- диабетическая ретинопатия ---
-    const dr = c.diabetic.on ? c.diabetic.severity / 100 : 0;
+    const dr = c.diabetic.on ? c.diabetic.severity / 100 : 0, drHem = 1 - (tx.diabetic.hemReduce || 0);
     const cap = (inst, pts, n) => Math.min(n, pts.length, inst.instanceMatrix.count);
-    const nMa = cap(patho.microan, PTS.microan, Math.round(dr * 60)), nDh = cap(patho.dotHem, PTS.dotHem, Math.round(Math.max(0, dr - 0.2) * 30)), nEx = cap(patho.exudate, PTS.exudate, Math.round(Math.max(0, dr - 0.3) * 70));
+    const nMa = cap(patho.microan, PTS.microan, Math.round(dr * 60 * drHem)), nDh = cap(patho.dotHem, PTS.dotHem, Math.round(Math.max(0, dr - 0.2) * 30 * drHem)), nEx = cap(patho.exudate, PTS.exudate, Math.round(Math.max(0, dr - 0.3) * 70 * drHem));
     for (let i = 0; i < nMa; i++) placeSphere(patho.microan, i, PTS.microan[i], 1);
     commit(patho.microan, nMa);
     for (let i = 0; i < nDh; i++) { const p = PTS.dotHem[i]; placeOnFundus(patho.dotHem, i, p[0], p[1], E.R_ret - 0.05, 0.6 + p[2] * 0.8, 0.5 + p[2] * 0.6, p[2] * 3); }
     commit(patho.dotHem, nDh);
     for (let i = 0; i < nEx; i++) { const p = PTS.exudate[i]; placeOnFundus(patho.exudate, i, p[0], p[1], E.R_ret - 0.04, 0.7 + p[2] * 0.8, 0.7 + p[2] * 0.8, 0); }
     commit(patho.exudate, nEx);
-    if (dr > 0.7) { patho.nvd.geometry.dispose(); patho.nvd.geometry = tangleGeometry(2.7, 0.2, 1.4 + (dr - 0.7) * 5, E.R_ret - 0.2, 9, 6, 0.05); patho.nvd.visible = true; } else patho.nvd.visible = false;
+    if (dr > 0.7 && !tx.diabetic.nvdGone) { patho.nvd.geometry.dispose(); patho.nvd.geometry = tangleGeometry(2.7, 0.2, 1.4 + (dr - 0.7) * 5, E.R_ret - 0.2, 9, 6, 0.05); patho.nvd.visible = true; } else patho.nvd.visible = false;
     // кровь в стекловидном теле при тяжёлой стадии
-    const vh = Math.max(0, (dr - 0.85) / 0.15);
+    const vh = tx.diabetic.vhGone ? 0 : Math.max(0, (dr - 0.85) / 0.15);
     S.vitreous.mesh.material.color.setHex(byId.vitreous.color).lerp(new THREE.Color(0x8a2a2a), vh);
     S.vitreous.baseOpacity = byId.vitreous.opacity + 0.35 * vh;
     S.vitreous.cap.material.color.copy(S.vitreous.mesh.material.color).multiplyScalar(0.85);
@@ -639,23 +725,31 @@
     setDetailUse('retinal_arteries', params.elong === 0 && aDil === 0 && aTort === 0);
     S.crv.mesh.material.color.copy(crvBase).lerp(crvDark, crvo);
     S.retinal_veins.mesh.material.color.setHex(byId.retinal_veins.color).lerp(crvDark, crvo * 0.8);
-    const nFl = Math.min(Math.round(crvo * 80), PTS.flame.length, patho.flameHem.instanceMatrix.count);
+    const nFl = Math.min(Math.round(crvo * 80 * (1 - (tx.crvo.hemReduce || 0))), PTS.flame.length, patho.flameHem.instanceMatrix.count);
     for (let i = 0; i < nFl; i++) { const p = PTS.flame[i]; const ang = Math.atan2(p[1], p[0] - 2.7); placeOnFundus(patho.flameHem, i, p[0], p[1], E.R_ret - 0.05, 0.35 + p[2] * 0.5, 1.2 + p[2] * 1.4, ang); }
     commit(patho.flameHem, nFl);
 
     // --- макула: отёк при диабете/тромбозе/влажной ВМД; бледность при амблиопии условна ---
-    const edema = Math.min(1, (dr > 0.4 ? dr * 0.8 : 0) + crvo * 0.9 + (wet ? amd : 0));
+    const edema = Math.min(1, (dr > 0.4 && !tx.diabetic.edemaGone ? dr * 0.8 : 0) + (tx.crvo.edemaGone ? 0 : crvo * 0.9) + (wet && !tx.amd.edemaGone ? amd : 0));
     const amb = c.amblyopia.on ? c.amblyopia.severity / 100 : 0;
     const atrophy = (!wet && amd > 0.5) ? (amd - 0.5) * 2 : 0; // географическая атрофия при сухой ВМД
     S.macula.mesh.material.color.copy(macBase).lerp(macEdema, edema).lerp(new THREE.Color(0xe8d9c2), atrophy).lerp(macPale, amb * 0.8);
     S.macula.cap.material.color.copy(S.macula.mesh.material.color).multiplyScalar(0.85);
 
     // --- непроходимость носослёзного канала ---
-    const nld = c.nld_obstruction.on ? c.nld_obstruction.severity / 100 : 0;
+    const nldOpen = tx.nld_obstruction.nldOpen || 0;
+    const nld = c.nld_obstruction.on ? c.nld_obstruction.severity / 100 * (1 - nldOpen) : 0;
     patho.nldSac.visible = nld > 0; patho.nldSac.scale.setScalar(1.05 + 0.7 * nld);
-    patho.nldPlug.visible = nld > 0; patho.tearLake.visible = nld > 0; patho.tearLake.scale.setScalar(0.5 + nld);
+    patho.nldPlug.visible = nld > 0 && nldOpen < 1; patho.nldPlug.scale.setScalar(1 - 0.6 * nldOpen);
+    patho.tearLake.visible = nld > 0; patho.tearLake.scale.setScalar(0.5 + nld);
 
-    updateNormGhosts(ap, { angle: c.strabismus.on ? c.strabismus.angle : 0, g });
+    // --- лазерные коагуляты: панретинальные, кольцо вокруг разрыва или аваскулярная зона при РН ---
+    if (tx.diabetic.prp || tx.crvo.prp) placeSpots(surg.laserSpots, EyeModel.SURG.prpPoints());
+    else if (tx.detachment.laserRing) placeSpots(surg.laserSpots, EyeModel.SURG.ringPoints());
+    else if (tx.rop.ropLaser && ropStage) placeSpots(surg.laserSpots, EyeModel.SURG.ropPoints(ropStage));
+    else surg.laserSpots.visible = false;
+
+    updateNormGhosts(ap, { angle: c.strabismus.on && !tx.strabismus.angleZero ? c.strabismus.angle : 0, g });
     applyOpacity();
     renderPatientView();
     renderConditionNotes();
@@ -690,23 +784,24 @@
 
   function renderPatientView() {
     const c = cond;
-    const cat = c.cataract.on ? c.cataract.severity / 100 : 0, ct = c.cataract.type;
-    const cc = c.congenital_cataract.on ? c.congenital_cataract.severity / 100 : 0;
-    const D = c.ametropia.on ? Math.abs(c.ametropia.diopters) : 0;
-    const cone = c.keratoconus.on ? c.keratoconus.severity / 100 : 0;
-    const gk = c.glaucoma.on ? Math.min(1, (c.glaucoma.cdr - 0.3) / 0.65) : 0;
-    const cg = c.congenital_glaucoma.on ? c.congenital_glaucoma.severity / 100 : 0;
-    const det = c.detachment.on ? c.detachment.extent / 100 : 0;
-    const amd = c.amd.on ? c.amd.severity / 100 : 0, wet = c.amd.type === 'wet';
-    const dr = c.diabetic.on ? c.diabetic.severity / 100 : 0;
-    const crvo = c.crvo.on ? c.crvo.severity / 100 : 0;
-    const rb = c.retinoblastoma.on ? c.retinoblastoma.severity / 100 : 0;
-    const rop = c.rop.on ? c.rop.stage : 0;
-    const strab = c.strabismus.on ? Math.abs(c.strabismus.angle) / 30 : 0;
-    const ast = c.astigmatism.on ? c.astigmatism.cyl / 6 : 0, astAx = c.astigmatism.on ? c.astigmatism.axis * Math.PI / 180 : 0;
-    const pt = c.ptosis.on ? c.ptosis.drop / 7 : 0;
-    const nld = c.nld_obstruction.on ? c.nld_obstruction.severity / 100 : 0;
-    const amb = c.amblyopia.on ? c.amblyopia.severity / 100 : 0;
+    const rel = (id) => 1 - (((activeTreatment(id) || {}).effects || {}).relief || 0); // насколько лечение снимает жалобы
+    const cat = (c.cataract.on ? c.cataract.severity / 100 : 0) * rel('cataract'), ct = c.cataract.type;
+    const cc = (c.congenital_cataract.on ? c.congenital_cataract.severity / 100 : 0) * rel('congenital_cataract');
+    const D = (c.ametropia.on ? Math.abs(c.ametropia.diopters) : 0) * rel('ametropia');
+    const cone = (c.keratoconus.on ? c.keratoconus.severity / 100 : 0) * rel('keratoconus');
+    const gk = c.glaucoma.on ? Math.min(1, (c.glaucoma.cdr - 0.3) / 0.65) : 0; // выпавшее поле зрения при глаукоме не возвращается
+    const cg = (c.congenital_glaucoma.on ? c.congenital_glaucoma.severity / 100 : 0) * rel('congenital_glaucoma');
+    const det = (c.detachment.on ? c.detachment.extent / 100 : 0) * rel('detachment');
+    const amd = (c.amd.on ? c.amd.severity / 100 : 0) * rel('amd'), wet = c.amd.type === 'wet';
+    const dr = (c.diabetic.on ? c.diabetic.severity / 100 : 0) * rel('diabetic');
+    const crvo = (c.crvo.on ? c.crvo.severity / 100 : 0) * rel('crvo');
+    const rb = (c.retinoblastoma.on ? c.retinoblastoma.severity / 100 : 0) * rel('retinoblastoma');
+    const rop = c.rop.on ? Math.round(c.rop.stage * rel('rop')) : 0;
+    const strab = (c.strabismus.on ? Math.abs(c.strabismus.angle) / 30 : 0) * rel('strabismus');
+    const ast = (c.astigmatism.on ? c.astigmatism.cyl / 6 : 0) * rel('astigmatism'), astAx = c.astigmatism.on ? c.astigmatism.axis * Math.PI / 180 : 0;
+    const pt = (c.ptosis.on ? c.ptosis.drop / 7 : 0) * rel('ptosis');
+    const nld = (c.nld_obstruction.on ? c.nld_obstruction.severity / 100 : 0) * rel('nld_obstruction');
+    const amb = (c.amblyopia.on ? c.amblyopia.severity / 100 : 0) * rel('amblyopia');
 
     const blur = cat * (ct === 'psc' ? 6 : ct === 'nuclear' ? 5 : 3.5) + cc * 7 + D * 0.55 + cone * 3 + crvo * 3 + dr * 1.8 + (wet ? amd * 1.5 : 0) + cg * 3 + nld * 1.2 + amb * 5 + (rop >= 4 ? 4 : 0);
     const sepia = ct === 'nuclear' ? cat * 0.85 : cat * 0.2;
@@ -756,6 +851,8 @@
     if (pt) notes.push('Птоз: веко закрывает верхнюю часть поля зрения.');
     if (nld) notes.push('Слезостояние: картинка «плывёт» от избытка слезы.');
     if (amb) notes.push('Амблиопия: этот глаз видит размыто и блёкло даже в очках.');
+    const treated = CONDITIONS.filter(x => activeTreatment(x.id)).map(x => activeTreatment(x.id).name);
+    if (treated.length) notes.push('После лечения (' + treated.join(', ') + ').');
     $('#pvNote').textContent = notes.length ? notes.join(' ') : 'Норма: чёткое изображение по всему полю.';
   }
 
@@ -855,8 +952,10 @@
     const visibleCut = (h) => !clip.on || clipPlane.distanceToPoint(h.point) >= 0;
     const hits = raycaster.intersectObjects(structureMeshes.filter(o => o.visible), false).filter(visibleCut);
     const phits = raycaster.intersectObjects(pathoMeshes.filter(o => o.visible), false).filter(visibleCut);
+    const shits = raycaster.intersectObjects(surgMeshes.filter(o => o.visible), false).filter(visibleCut);
     const opaque = hits.find(h => h.object.material.opacity >= 0.5);
     const firstOpaqueDist = opaque ? opaque.distance : Infinity;
+    if (shits.length && shits[0].distance <= firstOpaqueDist + 0.05 && (!phits.length || shits[0].distance <= phits[0].distance)) { const id = shits[0].object.userData.surg; showSurgCard(id.startsWith('iol') ? 'iol' : id.startsWith('syringe') ? 'syringe' : id === 'suturesLid' ? 'sutures' : id); return; }
     if (phits.length && phits[0].distance <= firstOpaqueDist + 0.05) { showPathoCard(phits[0].object.userData.patho); return; }
     if (!hits.length) return;
     select((opaque || hits[0]).object.userData.id);
@@ -891,7 +990,8 @@
         let html = '';
         if (c.options) html += `<label>${c.options.label}</label><select class="copt">${c.options.values.map(v => `<option value="${v.id}">${v.label}</option>`).join('')}</select>`;
         c.params.forEach(p => { html += `<label>${p.label}<span class="val" data-p="${p.id}"></span></label><input type="range" class="cp" data-p="${p.id}" min="${p.min}" max="${p.max}" step="${p.step}" value="${p.def}">`; });
-        html += `<div class="tools"><button class="btn demo" title="Плавно показать переход от нормы к выбранной степени">Показать изменение</button></div>`;
+        if ((TREATMENTS[c.id] || []).length) html += `<label>После лечения</label><select class="ctreat"></select>`;
+        html += `<div class="tools"><button class="btn demo" title="Плавно показать переход от нормы к выбранной степени">Показать изменение</button>${(TREATMENTS[c.id] || []).length ? '<button class="btn ba" title="Переключить между состоянием до и после лечения">До / после</button>' : ''}</div><p class="treat"></p>`;
         html += `<div class="chips"></div>`;
         const els = (CONDITION_ELEMENTS[c.id] || []).filter(e => PATHO_INFO[e]);
         if (els.length) html += `<div class="elems"><span>Элементы патологии:</span>${els.map(e => `<button data-e="${e}" title="Описание">${PATHO_INFO[e].name}</button>`).join('')}</div>`;
@@ -915,12 +1015,38 @@
           pulse.until = performance.now() + 900; // короткая подсветка того, что меняется
         }));
         body.querySelector('.demo').addEventListener('click', () => demo(c.id));
+        const tsel = body.querySelector('.ctreat');
+        if (tsel) tsel.addEventListener('change', (e) => selectTreatment(c.id, e.target.value || null));
+        const ba = body.querySelector('.ba');
+        if (ba) ba.addEventListener('click', () => {
+          const t = treat[c.id];
+          if (t.id) selectTreatment(c.id, null);
+          else { const list = (TREATMENTS[c.id] || []).filter(x => !x.forType || !c.options || cond[c.id][c.options.id] === x.forType); selectTreatment(c.id, t.last && list.find(x => x.id === t.last) ? t.last : (list[0] && list[0].id)); }
+        });
         body.addEventListener('click', (e) => { const b = e.target.closest('.chips button'); if (b) select(b.dataset.s); const eb = e.target.closest('.elems button'); if (eb) showPathoCard(eb.dataset.e); });
         box.appendChild(head); box.appendChild(body); gbody.appendChild(box);
       });
     });
     renderConditionNotes();
     syncCondGroups();
+  }
+  // Выбор лечения: перестраивает модель на состояние «после», подлетает к хирургическому элементу
+  function selectTreatment(condId, tId) {
+    const t = treat[condId]; t.id = tId || null; if (tId) t.last = tId;
+    if (tId && !cond[condId].on) { const chk = visibleBox(condId).querySelector('.con'); chk.checked = true; chk.dispatchEvent(new Event('change')); }
+    applyConditions();
+    if (focus.cond !== condId) setFocus(condId, { noFly: true });
+    const tr = activeTreatment(condId);
+    if (tr && ui.fly) { const el = (tr.elements || []).find(e => TREAT_VIEWS[e]); if (el) { const v = TREAT_VIEWS[el]; if (v.clip) { Object.assign(clip, { flip: false }, v.clip); updateClipPlane(); } const sc = globeScale(); const tg = V3(...v.target).multiplyScalar(sc), p = V3(...v.pos).sub(V3(...v.target)).multiplyScalar(sc).add(tg); flyTo(p.toArray(), tg.toArray()); } }
+    pulse.until = performance.now() + 1800;
+    updateMarker(); updateLabels();
+  }
+  function showSurgCard(el) {
+    const info = SURG_INFO[el]; if (!info) return;
+    const owner = focus.cond && activeTreatment(focus.cond) && (activeTreatment(focus.cond).elements || []).includes(el) ? focus.cond : null;
+    const tr = owner && activeTreatment(owner);
+    $('#info').innerHTML = `<h2>${info.name}</h2><div class="latin">хирургический элемент${tr ? ' · ' + tr.name : ''}</div><p>${info.desc}</p>` + (tr ? `<h4>Результат</h4><p>${tr.result}</p>` : '');
+    if (isMobile()) { $('#right').classList.add('open'); $('#left').classList.remove('open'); syncMobileBar(); }
   }
   // Одна проблема может стоять в обеих группах — состояние одно, блоки синхронизируются
   const boxesOf = (id) => [...document.querySelectorAll(`.cond[data-cond="${id}"]`)];
@@ -946,6 +1072,19 @@
         box.querySelector('.changes').innerHTML = items.length ? `<div class="chg-title">Что меняется</div><ul class="chg">${items.join('')}</ul>` : '';
       }
       c.params.forEach(p => { const v = cond[c.id][p.id]; const el = box.querySelector(`.val[data-p="${p.id}"]`); if (el) el.textContent = fmt(v, p); const inp = box.querySelector(`.cp[data-p="${p.id}"]`); if (inp && parseFloat(inp.value) !== v) inp.value = v; });
+      // варианты лечения для текущей формы болезни и описание выбранного
+      const tsel = box.querySelector('.ctreat');
+      if (tsel) {
+        const list = (TREATMENTS[c.id] || []).filter(x => !x.forType || !c.options || cond[c.id][c.options.id] === x.forType);
+        const want = '<option value="">нет — текущее состояние</option>' + list.map(x => `<option value="${x.id}">${x.name}</option>`).join('');
+        if (tsel.dataset.opts !== want) { tsel.dataset.opts = want; tsel.innerHTML = want; }
+        const cur = treat[c.id].id && list.find(x => x.id === treat[c.id].id) ? treat[c.id].id : '';
+        if (tsel.value !== cur) tsel.value = cur;
+        const tr = activeTreatment(c.id), tp = box.querySelector('.treat');
+        tp.innerHTML = tr ? `<b>${tr.name}</b><br>${tr.desc}<br><b>Результат:</b> ${tr.result}` : '';
+        tp.hidden = !tr;
+        const ba = box.querySelector('.ba'); if (ba) ba.classList.toggle('on', !!tr);
+      }
       const note = box.querySelector('.note');
       if (c.typeNotes) note.textContent = c.typeNotes[cond[c.id][c.options.id]] || '';
       else if (c.id === 'glaucoma') note.textContent = cond.glaucoma.iop > 21 ? `ВГД ${cond.glaucoma.iop} мм рт. ст. — выше нормы (10–21).` : `ВГД ${cond.glaucoma.iop} мм рт. ст. — в пределах нормы; возможна глаукома нормального давления.`;
@@ -1051,18 +1190,21 @@
     if (F) {
       v.affects.filter(id => byId[id] && S[id].visible && labels[id]).forEach(id => { labels[id].getWorldPosition(tmpV); items.push(Object.assign({ id, key: id, kind: 's', name: byId[id].name.replace(/\s*\(.*\)/, ''), text: ch[id] || '' }, project(tmpV))); });
       (CONDITION_ELEMENTS[focus.cond] || []).forEach(id => { const a = PATHO_INFO[id] && pathoAnchor(id); if (a) items.push(Object.assign({ id, key: 'el:' + id, kind: 'p', name: PATHO_INFO[id].name, text: PATHO_INFO[id].desc.split('. ')[0] + '.' }, project(a))); });
+      const tr = activeTreatment(focus.cond);
+      if (tr) (tr.elements || []).forEach(el => { const a = SURG_INFO[el] && surgAnchor(el); if (a) items.push(Object.assign({ id: el, key: 'sg:' + el, kind: 'g', name: SURG_INFO[el].name, text: SURG_INFO[el].desc.split('. ')[0] + '.' }, project(a))); });
     }
     const keys = items.map(i => i.key);
     Object.keys(calloutEls).forEach(k => { if (!keys.includes(k)) { const e = calloutEls[k]; e.box.remove(); e.path.remove(); e.dot.remove(); e.ring.remove(); delete calloutEls[k]; } });
     if (!items.length) return;
     items.forEach(it => {
       if (calloutEls[it.key]) return;
-      const box = document.createElement('div'); box.className = 'callout' + (it.kind === 'p' ? ' patho' : '');
+      const kindCls = it.kind === 'p' ? ' patho' : it.kind === 'g' ? ' surg' : '';
+      const box = document.createElement('div'); box.className = 'callout' + kindCls;
       box.innerHTML = `<b>${it.name}</b><span>${it.text}</span>`;
-      box.addEventListener('click', () => it.kind === 'p' ? showPathoCard(it.id) : select(it.id));
+      box.addEventListener('click', () => it.kind === 'p' ? showPathoCard(it.id) : it.kind === 'g' ? showSurgCard(it.id) : select(it.id));
       calloutBoxesEl.appendChild(box);
       const path = svgEl('path'), dot = svgEl('circle'), ring = svgEl('circle');
-      const cls = it.kind === 'p' ? ' patho' : '';
+      const cls = kindCls;
       path.setAttribute('class', cls.trim()); dot.setAttribute('class', 'dot' + cls); dot.setAttribute('r', 4); ring.setAttribute('class', 'ring' + cls); ring.setAttribute('r', 6);
       calloutSvg.appendChild(path); calloutSvg.appendChild(ring); calloutSvg.appendChild(dot);
       calloutEls[it.key] = { box, path, dot, ring };
@@ -1164,7 +1306,7 @@
       applyConditions();
       if (values.on) setFocus(id, { demo: !!values.demo }); else if (values.on === false && focus.cond === id) setFocus(nextEnabledCond(id));
     },
-    setFocus, flyToCondition, demo, showPathoCard, setAge: (years) => setAgeByYears(years), setAgeIndex: (i) => { age.idx = i; $('#age').value = i; applyConditions(); syncCondGroups(); },
+    setFocus, flyToCondition, demo, showPathoCard, showSurgCard, setTreatment: selectTreatment, setAge: (years) => setAgeByYears(years), setAgeIndex: (i) => { age.idx = i; $('#age').value = i; applyConditions(); syncCondGroups(); },
     setFly: (on) => { ui.fly = !!on; $('#flyOn').checked = ui.fly; },
     getState: () => ({ clip: Object.assign({}, clip), age: stop(), conditions: JSON.parse(JSON.stringify(cond)), visible: Object.fromEntries(STRUCTURES.map(s => [s.id, S[s.id].visible])) }),
     camera, controls, scene,

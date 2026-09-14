@@ -74,10 +74,13 @@ const EyeModel = (() => {
   geo.cornea = (p = {}) => {
     const k = p.cone || 0, ks = p.limbScale || 1, a = p.astig || 0, ax = (p.astigAxis || 0) * DEG; // кератоконус, масштаб купола, астигматизм
     const bump = (r) => Math.exp(-(r / 2.2) * (r / 2.2));
+    // ablation — лазерная коррекция: >0 уплощение центра (близорукость), <0 испарение средней периферии (дальнозоркость)
+    const abl = p.ablation || 0;
+    const ablate = (r) => abl > 0 ? -abl * Math.max(0, 1 - (r / 3) * (r / 3)) : abl * Math.max(0, 1 - ((r - 3) / 1.3) * ((r - 3) / 1.3));
     if (!a) {
       const ao = angAt(E.R_ca, E.r_limb), ai = angAt(E.R_cp, 5.5);
       const sc = ([r, y]) => [r * ks, E.apex - (E.apex - y) * ks];
-      const outer = arc(0, E.c_ca, E.R_ca, ao, Math.PI / 2, 48).map(([r, y]) => [r, y + 1.3 * k * bump(r)]).map(sc);
+      const outer = arc(0, E.c_ca, E.R_ca, ao, Math.PI / 2, 48).map(([r, y]) => [r, y + 1.3 * k * bump(r) + ablate(r)]).map(sc);
       const inner = arc(0, E.c_cp, E.R_cp, Math.PI / 2, ai, 48).map(([r, y]) => [r, y + 1.75 * k * bump(r)]).map(sc);
       return lathe([...outer, ...inner, outer[0]]);
     }
@@ -374,6 +377,74 @@ const EyeModel = (() => {
   geo.optic_nerve = (p = {}) => closedTube(nervePoints(p.elong || 0), 1.75 * (1 - 0.4 * (p.atrophy || 0)), 28);
   geo.nerve_sheath = (p = {}) => closedTube(nervePoints(p.elong || 0).slice(4), 2.45, 28);
 
+  // ---------- Теноновая капсула: фасциальный мешок вокруг яблока от лимба до нерва ----------
+  geo.tenon = () => {
+    const Ro = E.R_sc + 0.55, Ri = E.R_sc + 0.32, a0 = -Math.PI / 2 + 0.16; // отверстие у заднего полюса для нерва
+    const ao = angAt(Ro, E.r_limb + 1.3), ai = angAt(Ri, E.r_limb + 1.3);
+    const pts = [...arc(0, 0, Ro, a0, ao, 64), ...arc(0, 0, Ri, ai, a0, 64)];
+    pts.push(pts[0]);
+    return lathe(pts);
+  };
+
+  // ---------- Хирургические элементы (схематично) ----------
+  const SURG = {};
+  // Искусственный хрусталик: оптика 6 мм и две С-образные дужки в капсульном мешке
+  SURG.iol = () => {
+    const r = 3.0, s = 0.32, y0 = E.lens_eq_y - 0.3, R = (r * r + s * s) / (2 * s), aEq = Math.acos(r / R);
+    const optic = lathe([...arc(0, y0 - s + R, R, -Math.PI / 2, -aEq, 24), ...arc(0, y0 + s - R, R, aEq, Math.PI / 2, 24), [0, y0 - s]]);
+    const haptics = [0, Math.PI].map(a0 => {
+      const pts = [];
+      for (let i = 0; i <= 14; i++) { const t = i / 14, a = a0 + 0.3 + t * 2.1, rr = 2.95 + 3.3 * Math.sin(t * Math.PI); pts.push(V3(rr * Math.cos(a), y0, rr * Math.sin(a))); }
+      return tube(pts, 0.09, 28);
+    });
+    return { optic, haptics: mergeGeos(haptics) };
+  };
+  SURG.icl = () => lathe([[0, 8.68], [5.4, 8.28], [5.4, 8.12], [0, 8.52], [0, 8.68]]);
+  SURG.spectacle = () => lathe([[0, 21.6], [12, 21.6], [12, 22.2], [0, 22.2], [0, 21.6]], 96);
+  SURG.buckle = () => { const g = new THREE.TorusGeometry(E.R_sc + 0.45, 0.9, 12, 96); g.rotateX(Math.PI / 2); g.translate(0, -1.5, 0); return g; };
+  SURG.bleb = () => { const g = new THREE.SphereGeometry(1, 24, 16); g.scale(2.4, 1.3, 2.6); g.translate(0, 8.45, -8.35); return g; };
+  SURG.shunt = () => {
+    const d = V3(-0.62, -0.42, -0.66).normalize(), pos = d.clone().multiplyScalar(E.R_sc + 0.8);
+    const plate = new THREE.BoxGeometry(7, 0.9, 6);
+    const q = new THREE.Quaternion().setFromUnitVectors(V3(0, 1, 0), d); plate.applyQuaternion(q); plate.translate(pos.x, pos.y, pos.z);
+    const tubeG = tube([pos.clone().add(V3(1.2, 2.5, 1.2)), V3(-6.2, 5.5, -6.2), V3(-4.5, 9.0, -4.5), V3(-3.4, 9.2, -3.4)], 0.25, 32);
+    return mergeGeos([plate, tubeG]);
+  };
+  SURG.iridotomy = () => { const g = new THREE.CircleGeometry(0.4, 20); g.rotateX(-Math.PI / 2); g.translate(0, 9.42, -5.0); return g; };
+  SURG.sltSpots = () => { const pts = []; for (let i = 0; i < 48; i++) { const a = 2 * Math.PI * i / 48; pts.push(V3(5.92 * Math.cos(a), 9.2, 5.92 * Math.sin(a))); } return pts; };
+  SURG.graft = () => {
+    const y = E.c_ca + Math.sqrt(E.R_ca * E.R_ca - 16) + 0.03;
+    const ring = new THREE.TorusGeometry(4.0, 0.06, 8, 96); ring.rotateX(Math.PI / 2); ring.translate(0, y, 0);
+    const sutures = [];
+    for (let i = 0; i < 16; i++) { const a = 2 * Math.PI * i / 16; const p1 = V3(3.4 * Math.cos(a), E.c_ca + Math.sqrt(E.R_ca * E.R_ca - 3.4 * 3.4) + 0.05, 3.4 * Math.sin(a)), p2 = V3(4.7 * Math.cos(a), E.c_ca + Math.sqrt(E.R_ca * E.R_ca - 4.7 * 4.7) + 0.05, 4.7 * Math.sin(a)); sutures.push(tube([p1, p2], 0.06, 4)); }
+    return mergeGeos([ring, ...sutures]);
+  };
+  SURG.icrs = () => {
+    const y = E.c_ca + Math.sqrt(E.R_ca * E.R_ca - 3.6 * 3.6) - 0.3;
+    return mergeGeos([[0.35, Math.PI - 0.35], [Math.PI + 0.35, 2 * Math.PI - 0.35]].map(([a0, a1]) => { const pts = []; for (let i = 0; i <= 24; i++) { const a = a0 + (a1 - a0) * i / 24; pts.push(V3(3.6 * Math.cos(a), y, 3.6 * Math.sin(a))); } return tube(pts, 0.2, 32); }));
+  };
+  SURG.syringe = () => {
+    const q = V3(-1, 0, -1).normalize(), p = q.clone().multiplyScalar(Math.sqrt(E.R_sc * E.R_sc - 5.5 * 5.5)).add(V3(0, 5.5, 0)), n = p.clone().normalize();
+    const needle = tube([p.clone().addScaledVector(n, -5), p.clone().addScaledVector(n, 7)], 0.15, 2);
+    const body = new THREE.CylinderGeometry(1.1, 1.1, 10, 24); body.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(V3(0, 1, 0), n)); const bc = p.clone().addScaledVector(n, 12); body.translate(bc.x, bc.y, bc.z);
+    const plunger = new THREE.CylinderGeometry(0.45, 0.45, 6, 12); plunger.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(V3(0, 1, 0), n)); const pc = p.clone().addScaledVector(n, 19.5); plunger.translate(pc.x, pc.y, pc.z);
+    return { needle, body: mergeGeos([body, plunger]), entry: p };
+  };
+  SURG.probe = () => {
+    const L = LACRIMAL;
+    return tube([V3(9.6, 13.5, 1.3), L.punctaLow, V3(9.9, 9.0, 2.9), V3(12.5, 8.2, 1.8), V3(16.2, 6.6, 0.2), L.sac.clone().add(V3(0, 0, -1.5)), L.sac.clone().add(V3(0, -0.2, 4.5)), V3(17.8, 4.4, 11), V3(18.3, 3.4, 16.5), L.ductEnd.clone().add(V3(0.1, -0.2, 2.5))], 0.3, 64);
+  };
+  SURG.gasBubble = () => { const g = new THREE.SphereGeometry(7.6, 40, 28); g.translate(0, -2.0, -2.4); return g; };
+  // Точки лазерных коагулятов: панретинальная (периферия), кольцо вокруг разрыва, аваскулярная зона при РН
+  SURG.prpPoints = () => { const pts = []; for (let u = -9.4; u <= 9.4; u += 0.95) for (let v = -8.5; v <= 8.5; v += 0.95) { if (Math.hypot(u, v) < 3.4 || Math.hypot(u - 2.7, v) < 1.7) continue; pts.push(fundus(u + (v % 1.9 ? 0.45 : 0), v, E.R_ret - 0.04)); } return pts; };
+  SURG.ringPoints = () => { const pts = []; for (let k = 0; k < 2; k++) for (let i = 0; i < 20; i++) { const a = 2 * Math.PI * i / 20 + k * 0.16, r = 2.4 + k * 0.7; pts.push(fundus(-4.75 + r * Math.cos(a), -1.75 + r * Math.sin(a), E.R_ret - 0.04)); } return pts; };
+  SURG.ropPoints = (stage) => { const th0 = Math.PI - 1.1, th1 = Math.PI + 1.1, phi0 = (stage >= 3 ? 86 : 94) * DEG, phi1 = 110 * DEG, pts = []; for (let i = 0; i < 14; i++) for (let j = 0; j < 6; j++) pts.push(sphere_pt(th0 + (th1 - th0) * (i + 0.5) / 14, phi0 + (phi1 - phi0) * (j + 0.5) / 6, E.R_ret - 0.05)); return pts; };
+  // Швы: новое место прикрепления медиальной прямой (рецессия) или укорочение леватора на веке
+  SURG.suturePoints = (kind) => {
+    if (kind === 'strab') { const phi = angAt(E.R_sc, E.r_limb) + 5.5 / E.R_sc + 4.5 / E.R_sc, R = E.R_sc + 0.3; return [-2.6, 0, 2.6].map(z => V3(R * Math.sin(phi) * Math.cos(z / 12), R * Math.cos(phi), z)); }
+    return [-3, 0, 3].map(x => V3(x, Math.sqrt(13.75 * 13.75 - x * x - 36) , -6));
+  };
+
   // ---------- Слёзоотводящие пути (правый глаз, нос = +X) ----------
   const LACRIMAL = { sac: V3(17.4, 5.4, 2.6), sacAxes: V3(2.1, 2.4, 5.6), ductEnd: V3(18.6, 2.8, 21.5), punctaUp: V3(9.6, 9.4, -1.3), punctaLow: V3(9.6, 9.4, 1.3) };
   function lacrimalDrainage() {
@@ -499,6 +570,7 @@ const EyeModel = (() => {
     add('lacrimal', lac, { position: V3(-9.5, 3.5, -9.5) });
     add('lacrimal_drainage', lacrimalDrainage());
     add('levator', levator());
+    add('tenon', geo.tenon());
     add('orbit_bone', orbitBone());
 
     // ---- Сосуды ----
@@ -571,8 +643,8 @@ const EyeModel = (() => {
     rectus_sup: V3(0, -2, -12.6), rectus_inf: V3(0, -2, 12.6), rectus_med: V3(12.6, -2, 0), rectus_lat: V3(-12.6, -2, 0), oblique_sup: V3(4, 6, -12.5), oblique_inf: V3(4, 5, 12.5),
     lid_upper: V3(0, 8.5, -10.5), lid_lower: V3(0, 9.0, 8.5), lacrimal: V3(-9.5, 3.5, -12),
     trabecular: V3(6.3, 9.4, 1.2), schlemm: V3(-6.4, 9.2, 1.2), posterior_chamber: V3(-4.6, 8.3, 1.4), rpe: V3(7.6, -7.6, 1.2), cloquet: V3(0.5, -1.5, 0.8),
-    levator: V3(1, 3, -15.5), lacrimal_drainage: V3(17.6, 5.4, 4), orbit_bone: V3(-19, -6, -10),
+    levator: V3(1, 3, -15.5), lacrimal_drainage: V3(17.6, 5.4, 4), orbit_bone: V3(-19, -6, -10), tenon: V3(-8.5, -4, 8.5),
   };
 
-  return { E, geo, build, LABELS, LACRIMAL, fundus, setFundusElong, rng, tube, closedTube, mergeGeos, retinalTree, treeSamplePoints, detachmentGeometries, orient, shellFromGrid, lensArcs, lidGeometry, retinoblastomaGeometry, ropGeometries, sphere_pt };
+  return { E, geo, SURG, build, LABELS, LACRIMAL, fundus, setFundusElong, rng, tube, closedTube, mergeGeos, retinalTree, treeSamplePoints, detachmentGeometries, orient, shellFromGrid, lensArcs, lidGeometry, retinoblastomaGeometry, ropGeometries, sphere_pt };
 })();
