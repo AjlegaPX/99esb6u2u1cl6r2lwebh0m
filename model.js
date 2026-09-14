@@ -336,6 +336,35 @@ const EyeModel = (() => {
   // Ориентация цилиндра/трубки вдоль направления
   function orient(obj, dir) { obj.quaternion.setFromUnitVectors(V3(0, 1, 0), dir.clone().normalize()); }
 
+  // ---------- Зрительный нерв с S-изгибом (процедурный, умеет истончаться при атрофии) ----------
+  const NERVE_CTRL = [E.disc_dir.clone().multiplyScalar(10.5), E.disc_dir.clone().multiplyScalar(13.5), V3(3.1, -19.5, 0.35), V3(5.6, -27.0, 0.7), V3(9.2, -34.8, 0.3)];
+  function nervePoints(elong = 0) {
+    const pts = NERVE_CTRL.map(p => p.clone());
+    pts[0].addScaledVector(E.disc_dir, elong); pts[1].addScaledVector(E.disc_dir, elong * 0.7);
+    return new THREE.CatmullRomCurve3(pts, false, 'centripetal', 0.5).getPoints(48);
+  }
+  // Замкнутая трубка (с торцами) вдоль ломаной — для срезов нужна замкнутая поверхность
+  function closedTube(pts, radius, sides = 24) {
+    const n = pts.length, pos = [], idx = [], T = [], N = [];
+    for (let i = 0; i < n; i++) { const a = pts[Math.max(0, i - 1)], b = pts[Math.min(n - 1, i + 1)]; T.push(b.clone().sub(a).normalize()); }
+    const ref = Math.abs(T[0].z) < 0.9 ? V3(0, 0, 1) : V3(1, 0, 0);
+    N.push(ref.clone().sub(T[0].clone().multiplyScalar(ref.dot(T[0]))).normalize());
+    for (let i = 1; i < n; i++) { const v = N[i - 1].clone().sub(T[i].clone().multiplyScalar(N[i - 1].dot(T[i]))); N.push(v.lengthSq() > 1e-9 ? v.normalize() : N[i - 1].clone()); }
+    for (let i = 0; i < n; i++) {
+      const B = T[i].clone().cross(N[i]).normalize();
+      for (let k = 0; k < sides; k++) { const a = 2 * Math.PI * k / sides; const q = pts[i].clone().addScaledVector(N[i], Math.cos(a) * radius).addScaledVector(B, Math.sin(a) * radius); pos.push(q.x, q.y, q.z); }
+    }
+    for (let i = 0; i < n - 1; i++) for (let k = 0; k < sides; k++) { const a = i * sides + k, b = i * sides + (k + 1) % sides, c = (i + 1) * sides + (k + 1) % sides, d = (i + 1) * sides + k; idx.push(a, b, c, a, c, d); }
+    const c0 = pos.length / 3; pos.push(pts[0].x, pts[0].y, pts[0].z);
+    const c1 = pos.length / 3; pos.push(pts[n - 1].x, pts[n - 1].y, pts[n - 1].z);
+    for (let k = 0; k < sides; k++) { idx.push(c0, (k + 1) % sides, k); idx.push(c1, (n - 1) * sides + k, (n - 1) * sides + (k + 1) % sides); }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3)); g.setIndex(idx); g.computeVertexNormals();
+    return g;
+  }
+  geo.optic_nerve = (p = {}) => closedTube(nervePoints(p.elong || 0), 1.75 * (1 - 0.4 * (p.atrophy || 0)), 28);
+  geo.nerve_sheath = (p = {}) => closedTube(nervePoints(p.elong || 0).slice(4), 2.45, 28);
+
   // ---------- Слёзоотводящие пути (правый глаз, нос = +X) ----------
   const LACRIMAL = { sac: V3(17.4, 5.4, 2.6), sacAxes: V3(2.1, 2.4, 5.6), ductEnd: V3(18.6, 2.8, 21.5), punctaUp: V3(9.6, 9.4, -1.3), punctaLow: V3(9.6, 9.4, 1.3) };
   function lacrimalDrainage() {
@@ -435,12 +464,9 @@ const EyeModel = (() => {
     add('cloquet', cloquet(), { noCap: true });
     add('disc', geo.disc(params), { position: D.clone().multiplyScalar(E.R_ret + 0.02 + (params.elong || 0)), dir: D });
 
-    // Зрительный нерв и оболочки: от склеры назад на 27 мм
-    const L = 27, nerveStart = E.R_sc - 0.6 + (params.elong || 0);
-    const nerve = new THREE.CylinderGeometry(1.75, 1.75, L, 32, 1, false);
-    add('optic_nerve', nerve, { position: D.clone().multiplyScalar(nerveStart + L / 2), dir: D });
-    const sheath = new THREE.CylinderGeometry(2.5, 2.5, L - 1, 32, 1, false);
-    add('nerve_sheath', sheath, { position: D.clone().multiplyScalar(nerveStart + 1.2 + (L - 1) / 2), dir: D });
+    // Зрительный нерв с S-изгибом и его оболочки
+    add('optic_nerve', geo.optic_nerve(params));
+    add('nerve_sheath', geo.nerve_sheath(params));
 
     // Мышцы
     const zinn = D.clone().multiplyScalar(36);
@@ -539,5 +565,5 @@ const EyeModel = (() => {
     levator: V3(1, 3, -15.5), lacrimal_drainage: V3(17.6, 5.4, 4), orbit_bone: V3(-19, -6, -10),
   };
 
-  return { E, geo, build, LABELS, LACRIMAL, fundus, setFundusElong, rng, tube, mergeGeos, retinalTree, treeSamplePoints, detachmentGeometries, orient, shellFromGrid, lensArcs, lidGeometry, retinoblastomaGeometry, ropGeometries, sphere_pt };
+  return { E, geo, build, LABELS, LACRIMAL, fundus, setFundusElong, rng, tube, closedTube, mergeGeos, retinalTree, treeSamplePoints, detachmentGeometries, orient, shellFromGrid, lensArcs, lidGeometry, retinoblastomaGeometry, ropGeometries, sphere_pt };
 })();

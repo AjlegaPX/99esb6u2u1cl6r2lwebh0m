@@ -119,6 +119,18 @@
   ul.chg li { margin: 2px 0; }
   ul.chg li.n { list-style: none; margin-left: -16px; color: var(--muted); margin-top: 5px; }
   .cond-body p.parents { color: var(--text); background: var(--accent-soft); padding: 6px 8px; border-radius: 6px; }
+  /* выносные подписи затронутых структур */
+  #callouts, #calloutBoxes { position: absolute; inset: 0; pointer-events: none; z-index: 1; width: 100%; height: 100%; overflow: visible; }
+  .callout { position: absolute; width: 210px; pointer-events: auto; cursor: pointer; background: var(--panel); color: var(--text); border: 1px solid var(--danger); border-left-width: 3px; border-radius: 6px; padding: 4px 7px; font-size: 11.5px; line-height: 1.25; box-shadow: var(--shadow); }
+  .callout b { display: block; font-size: 12px; }
+  .callout span { display: block; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .callout:hover { border-color: var(--accent); }
+  .callout.behind { display: none; }
+  #callouts path { fill: none; stroke: var(--danger); stroke-width: 1.5; }
+  #callouts circle.dot { fill: var(--danger); stroke: #fff; stroke-width: 1.5; }
+  #callouts circle.ring { fill: none; stroke: var(--danger); stroke-width: 1.5; animation: ringPulse 1.4s ease-out infinite; }
+  @keyframes ringPulse { from { r: 5; opacity: .9; } to { r: 18; opacity: 0; } }
+  @media (max-width: 980px) { .callout { width: 150px; font-size: 10.5px; } .callout b { font-size: 11px; } }
   /* маркер текущей проблемы в 3D */
   .marker { pointer-events: none; font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 14px; background: var(--danger); color: #fff; white-space: nowrap; transform: translate(14px, -50%); box-shadow: 0 1px 4px rgba(0,0,0,.35); position: relative; }
   .marker::before { content: ""; position: absolute; left: -12px; top: 50%; width: 10px; height: 10px; margin-top: -5px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 0 3px rgba(255,255,255,.85); }
@@ -211,6 +223,8 @@
 
   <main id="view">
     <div id="labels"></div>
+    <svg id="callouts"></svg>
+    <div id="calloutBoxes"></div>
     <div id="hint">Вращение — левая кнопка, сдвиг — правая, масштаб — колесо. Клик по структуре — описание.</div>
     <div id="axisHint">Нос → справа · Висок ← слева</div>
   </main>

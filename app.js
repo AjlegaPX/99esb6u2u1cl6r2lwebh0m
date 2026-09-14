@@ -100,7 +100,7 @@
     return cap;
   }
 
-  const params = { elong: 0, cone: 0, cdr: 0.3, bombe: 0, pupil: E.pupil, limbScale: 1, lensThick: 1, ptosis: 0, physHyper: 0 };
+  const params = { elong: 0, cone: 0, cdr: 0.3, bombe: 0, pupil: E.pupil, limbScale: 1, lensThick: 1, ptosis: 0, physHyper: 0, atrophy: 0 };
   const meshes = EyeModel.build((id, opts) => baseMaterial(byId[id], opts), params);
   const structureMeshes = [];
   STRUCTURES.forEach(def => {
@@ -176,7 +176,7 @@
     Object.keys(labels).forEach(id => {
       const o = labels[id], vis = S[id].visible;
       let ok = ui.labels && vis && (labelGroups[S[id].def.group] || id === selectedId);
-      if (F && !F.has(id) && id !== selectedId) ok = false;
+      if (F && id !== selectedId) ok = false; // в режиме проблемы вместо подписей работают выносные плашки
       if (ok) {
         const base = EyeModel.LABELS[id];
         o.position.copy(base);
@@ -323,6 +323,8 @@
       if (c.group === 'child' && !isChild() && !opts.keepAge) setAgeByYears(c.typicalAge || 3);
       if (ui.fly && !opts.noFly) flyToCondition(id);
       pulse.until = performance.now() + 2600;
+      // после подлёта проигрываем переход от нормы к выбранной степени, чтобы изменение было видно в движении
+      if (opts.demo) setTimeout(() => { if (cond[id].on && focus.cond === id) demo(id); }, ui.fly && !opts.noFly ? 950 : 150);
     }
     document.querySelectorAll('.cond').forEach(b => b.classList.toggle('focus', on && b.dataset.cond === id));
     applyOpacity(); updateLabels(); updateMarker();
@@ -405,6 +407,7 @@
     params.lensThick = ap.lensThick;
     params.ptosis = c.ptosis.on ? c.ptosis.drop : 0;
     params.physHyper = ap.hyper;
+    params.atrophy = c.glaucoma.on ? Math.min(1, (c.glaucoma.cdr - 0.3) / 0.65) : cg * 0.6; // истончение зрительного нерва
     // масштаб: возраст — весь глаз с орбитой, буфтальм — только яблоко
     eyeGroup.scale.setScalar(ap.s); detailGroup.scale.setScalar(ap.s);
     const g = 1 + 0.22 * cg; globeLocal.scale.setScalar(g); globeWorld.scale.setScalar(g);
@@ -426,7 +429,9 @@
     setDetailUse('sclera', params.elong === 0 && Math.abs(params.limbScale - 1) < 1e-3);
     setDetailUse('iris', params.bombe === 0 && Math.abs(params.pupil - E.pupil) < 1e-3);
     setDetailUse('lid_upper', params.ptosis === 0);
-    const key = [params.elong, params.cone, params.cdr, params.bombe, params.pupil, params.limbScale, params.lensThick, params.ptosis].join('|');
+    setDetailUse('optic_nerve', params.elong === 0 && params.atrophy === 0);
+    setDetailUse('nerve_sheath', params.elong === 0);
+    const key = [params.elong, params.cone, params.cdr, params.bombe, params.pupil, params.limbScale, params.lensThick, params.ptosis, params.atrophy].join('|');
     if (key !== lastGeoKey) {
       const prev = lastGeoKey.split('|');
       const elongChanged = prev[0] !== String(params.elong);
@@ -446,11 +451,9 @@
       setGeometry('lens_nucleus', EyeModel.geo.lens_nucleus(params));
       setGeometry('disc', EyeModel.geo.disc(params));
       setGeometry('lid_upper', EyeModel.lidGeometry(true, params.ptosis));
-      const D = E.disc_dir;
-      S.disc.mesh.position.copy(D).multiplyScalar(E.R_ret + 0.02 + params.elong);
-      const L = 27, ns = E.R_sc - 0.6 + params.elong;
-      S.optic_nerve.mesh.position.copy(D).multiplyScalar(ns + L / 2);
-      S.nerve_sheath.mesh.position.copy(D).multiplyScalar(ns + 1.2 + (L - 1) / 2);
+      setGeometry('optic_nerve', EyeModel.geo.optic_nerve(params));
+      setGeometry('nerve_sheath', EyeModel.geo.nerve_sheath(params));
+      S.disc.mesh.position.copy(E.disc_dir).multiplyScalar(E.R_ret + 0.02 + params.elong);
       updateRays();
     }
     // --- глаукома и врождённая глаукома ---
@@ -820,7 +823,7 @@
         body.innerHTML = html;
         head.querySelector('.con').addEventListener('change', (e) => {
           cond[c.id].on = e.target.checked; box.classList.toggle('on', e.target.checked); applyConditions();
-          setFocus(e.target.checked ? c.id : (focus.cond === c.id ? nextEnabledCond(c.id) : focus.cond));
+          setFocus(e.target.checked ? c.id : (focus.cond === c.id ? nextEnabledCond(c.id) : focus.cond), { demo: e.target.checked });
         });
         head.querySelector('.name').addEventListener('click', () => {
           const chk = head.querySelector('.con');
@@ -947,6 +950,48 @@
     if ($('#left').classList.contains('open') || $('#right').classList.contains('open')) { $('#left').classList.remove('open'); $('#right').classList.remove('open'); syncMobileBar(); }
   });
 
+  // ---------- Выносные подписи затронутых структур: плашка сбоку, линия к структуре, пульсирующая точка ----------
+  const calloutSvg = $('#callouts'), calloutBoxesEl = $('#calloutBoxes');
+  const calloutEls = {};
+  const svgEl = (tag) => document.createElementNS('http://www.w3.org/2000/svg', tag);
+  function updateCallouts() {
+    const F = focusSet();
+    const c = F ? condById[focus.cond] : null, v = c ? conditionView(c) : null, ch = (v && v.changes) || {};
+    const ids = F ? v.affects.filter(id => byId[id] && S[id].visible && labels[id]) : [];
+    Object.keys(calloutEls).forEach(id => { if (!ids.includes(id)) { const e = calloutEls[id]; e.box.remove(); e.path.remove(); e.dot.remove(); e.ring.remove(); delete calloutEls[id]; } });
+    if (!ids.length) return;
+    const w = view.clientWidth, h = view.clientHeight, bw = isMobile() ? 150 : 210, margin = 10, top = 14, gap = 6;
+    const items = ids.map(id => { labels[id].getWorldPosition(tmpV); const s = tmpV.clone().project(camera); return { id, ax: (s.x + 1) / 2 * w, ay: (1 - s.y) / 2 * h, behind: s.z > 1 }; });
+    items.forEach(it => {
+      if (calloutEls[it.id]) return;
+      const box = document.createElement('div'); box.className = 'callout';
+      box.innerHTML = `<b>${byId[it.id].name.replace(/\s*\(.*\)/, '')}</b><span>${ch[it.id] || ''}</span>`;
+      box.addEventListener('click', () => select(it.id));
+      calloutBoxesEl.appendChild(box);
+      const path = svgEl('path'), dot = svgEl('circle'), ring = svgEl('circle');
+      dot.setAttribute('class', 'dot'); dot.setAttribute('r', 4); ring.setAttribute('class', 'ring'); ring.setAttribute('r', 6);
+      calloutSvg.appendChild(path); calloutSvg.appendChild(ring); calloutSvg.appendChild(dot);
+      calloutEls[it.id] = { box, path, dot, ring };
+    });
+    // раскладка по двум колонкам, ближе к своей структуре, без наложений
+    let left = items.filter(i => i.ax < w / 2).sort((a, b) => a.ay - b.ay), right = items.filter(i => i.ax >= w / 2).sort((a, b) => a.ay - b.ay);
+    const cap = Math.max(2, Math.floor((h - top) / 54));
+    while (left.length > cap && right.length < cap) right.push(left.pop());
+    while (right.length > cap && left.length < cap) left.push(right.pop());
+    const place = (col, x) => {
+      let y = top;
+      col.forEach(it => { const box = calloutEls[it.id].box; const bh = box.offsetHeight || 44; let by = Math.max(y, it.ay - bh / 2); if (by + bh > h - 8) by = Math.max(top, h - 8 - bh); box.style.left = x + 'px'; box.style.top = by + 'px'; it.bx = x; it.by = by; it.bh = bh; y = by + bh + gap; });
+    };
+    place(left, margin); place(right, w - margin - bw);
+    items.forEach(it => {
+      const e = calloutEls[it.id]; e.box.classList.toggle('behind', it.behind);
+      const leftSide = it.bx < w / 2, fromX = leftSide ? it.bx + bw : it.bx, fromY = it.by + Math.min(it.bh / 2, 16), midX = leftSide ? fromX + 14 : fromX - 14;
+      const ax = Math.max(2, Math.min(w - 2, it.ax)), ay = Math.max(2, Math.min(h - 2, it.ay));
+      e.path.setAttribute('d', it.behind ? '' : `M${fromX.toFixed(1)},${fromY.toFixed(1)} L${midX.toFixed(1)},${fromY.toFixed(1)} L${ax.toFixed(1)},${ay.toFixed(1)}`);
+      [e.dot, e.ring].forEach(el => { el.setAttribute('cx', ax.toFixed(1)); el.setAttribute('cy', ay.toFixed(1)); el.style.display = it.behind ? 'none' : ''; });
+    });
+  }
+
   const GROUP_PRIO = { shell: 0, inner: 1, nerves: 2, vessels: 3, muscles: 4, adnexa: 5, orbit: 6 };
   let declutterTick = 0;
   function declutterLabels() {
@@ -955,6 +1000,7 @@
       .map(id => ({ id, el: labels[id].element, p: (id === selectedId ? -10 : 0) + GROUP_PRIO[S[id].def.group] })).sort((a, b) => a.p - b.p);
     const kept = [];
     if (markerObj.visible) kept.push(markerDiv.getBoundingClientRect());
+    Object.values(calloutEls).forEach(e => { if (!e.box.classList.contains('behind')) kept.push(e.box.getBoundingClientRect()); });
     items.forEach(it => {
       const r = it.el.getBoundingClientRect();
       const hit = kept.some(k => !(r.right < k.left || r.left > k.right || r.bottom < k.top || r.top > k.bottom));
@@ -994,6 +1040,7 @@
     renderer.render(scene, camera);
     labelRenderer.render(scene, camera);
     declutterLabels();
+    updateCallouts();
   }
   function loop() { render(); requestAnimationFrame(loop); }
 
@@ -1022,7 +1069,7 @@
       if (box) { box.querySelector('.con').checked = !!cond[id].on; box.classList.toggle('on', !!cond[id].on);
         const sel = box.querySelector('.copt'); const c = condById[id]; if (sel && c.options) sel.value = cond[id][c.options.id]; }
       applyConditions();
-      if (values.on) setFocus(id); else if (values.on === false && focus.cond === id) setFocus(nextEnabledCond(id));
+      if (values.on) setFocus(id, { demo: !!values.demo }); else if (values.on === false && focus.cond === id) setFocus(nextEnabledCond(id));
     },
     setFocus, flyToCondition, demo, setAge: (years) => setAgeByYears(years), setAgeIndex: (i) => { age.idx = i; $('#age').value = i; applyConditions(); },
     setFly: (on) => { ui.fly = !!on; $('#flyOn').checked = ui.fly; },
