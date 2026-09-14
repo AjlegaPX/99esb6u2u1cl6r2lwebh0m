@@ -71,15 +71,24 @@ const EyeModel = (() => {
   geo.choroid = (p) => lathe(shellProfileY(E.R_sci - 0.005, E.R_ch, E.y_ora, p.elong));
   geo.retina = (p) => lathe(shellProfileY(E.R_ch - 0.005, E.R_ret, E.y_ora, p.elong));
 
-  geo.cornea = (p) => {
-    const k = p.cone || 0, ks = p.limbScale || 1; // кератоконус 0..1, масштаб купола
+  geo.cornea = (p = {}) => {
+    const k = p.cone || 0, ks = p.limbScale || 1, a = p.astig || 0, ax = (p.astigAxis || 0) * DEG; // кератоконус, масштаб купола, астигматизм
     const bump = (r) => Math.exp(-(r / 2.2) * (r / 2.2));
-    const ao = angAt(E.R_ca, E.r_limb), ai = angAt(E.R_cp, 5.5);
-    const sc = ([r, y]) => [r * ks, E.apex - (E.apex - y) * ks];
-    const outer = arc(0, E.c_ca, E.R_ca, ao, Math.PI / 2, 48).map(([r, y]) => [r, y + 1.3 * k * bump(r)]).map(sc);
-    const inner = arc(0, E.c_cp, E.R_cp, Math.PI / 2, ai, 48).map(([r, y]) => [r, y + 1.75 * k * bump(r)]).map(sc);
-    const pts = [...outer, ...inner, outer[0]];
-    return lathe(pts);
+    if (!a) {
+      const ao = angAt(E.R_ca, E.r_limb), ai = angAt(E.R_cp, 5.5);
+      const sc = ([r, y]) => [r * ks, E.apex - (E.apex - y) * ks];
+      const outer = arc(0, E.c_ca, E.R_ca, ao, Math.PI / 2, 48).map(([r, y]) => [r, y + 1.3 * k * bump(r)]).map(sc);
+      const inner = arc(0, E.c_cp, E.R_cp, Math.PI / 2, ai, 48).map(([r, y]) => [r, y + 1.75 * k * bump(r)]).map(sc);
+      return lathe([...outer, ...inner, outer[0]]);
+    }
+    // торическая роговица: сагитта в сильном меридиане больше, в слабом меньше (тело на сетке, не вращения)
+    const sagO = (r) => E.R_ca - Math.sqrt(Math.max(0, E.R_ca * E.R_ca - r * r));
+    const sagI = (r) => E.R_cp - Math.sqrt(Math.max(0, E.R_cp * E.R_cp - r * r));
+    const m = (th) => 1 + a * Math.cos(2 * (th - ax));
+    const pt = (th, r, y) => V3(r * Math.cos(th) * ks, E.apex - (E.apex - y) * ks, -r * Math.sin(th) * ks); // −z = вверх, поэтому ось 90° вертикальна
+    const outer = (u, v) => { const th = 2 * Math.PI * u, r = E.r_limb * v; return pt(th, r, E.apex - sagO(r) * m(th) + 1.3 * k * bump(r)); };
+    const inner = (u, v) => { const th = 2 * Math.PI * u, r = 5.5 * v; return pt(th, r, E.apex_p - sagI(r) * m(th) + 1.75 * k * bump(r)); };
+    return shellFromGrid(outer, inner, 128, 20);
   };
 
   // Трабекулярная сеть — клин в углу передней камеры; шлеммов канал — кольцевой сосуд рядом с ней

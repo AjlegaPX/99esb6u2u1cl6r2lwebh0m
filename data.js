@@ -435,11 +435,20 @@ const CONDITIONS = [
     params: [ { id: 'diopters', label: 'Рефракция', min: -12, max: 6, step: 0.5, def: -4, unit: ' дптр' } ],
   },
   {
-    id: 'keratoconus', name: 'Кератоконус',
-    desc: 'Прогрессирующее истончение роговицы, при котором она выпячивается конусом. Возникает неправильный астигматизм, который плохо исправляется очками.',
+    id: 'keratoconus', name: 'Кератоконус', groups: ['adult', 'child'], typicalAge: 14,
+    desc: 'Прогрессирующее истончение роговицы, при котором она выпячивается конусом. Возникает неправильный астигматизм, который плохо исправляется очками. Обычно начинается в 12–20 лет и прогрессирует до 30–35; у подростков течёт быстрее, поэтому важно поймать рано и остановить кросслинкингом.',
     symptoms: 'Постепенное ухудшение зрения, двоение и «хвосты» у источников света, частая смена очков, непереносимость мягких линз.',
+    signs: 'Быстро растущая близорукость с астигматизмом у подростка, очки перестают помогать через несколько месяцев, ребёнок часто трёт глаза (аллергия, атопия).',
     affects: ['cornea'],
     params: [ { id: 'severity', label: 'Выраженность', min: 0, max: 100, step: 1, def: 60, unit: '%' } ],
+  },
+  {
+    id: 'astigmatism', name: 'Астигматизм', groups: ['adult', 'child'], typicalAge: 6,
+    desc: 'Роговица (реже хрусталик) искривлена в одном меридиане сильнее, чем в другом: не как шар, а как бок ложки. Лучи одного направления собираются раньше, другого позже, и вместо точки получаются две фокальные линии. У детей до 1 года небольшой астигматизм нормален, после 3 лет более 1,5 дптр требует очков, иначе развивается амблиопия.',
+    symptoms: 'Размытость и по вдаль, и вблизи, буквы двоятся или «тянутся» в одну сторону, усталость глаз и головная боль при чтении.',
+    signs: 'Ребёнок щурится, наклоняет или поворачивает голову, чтобы рассмотреть, путает похожие буквы, быстро устаёт от чтения. Часто наследуется.',
+    affects: ['cornea'],
+    params: [ { id: 'cyl', label: 'Астигматизм', min: 0, max: 6, step: 0.25, def: 3, unit: ' дптр' }, { id: 'axis', label: 'Ось сильного меридиана', min: 0, max: 165, step: 15, def: 90, unit: '°' } ],
   },
   {
     id: 'detachment', name: 'Отслойка сетчатки',
@@ -550,6 +559,7 @@ const CONDITION_VIEWS = {
                byType: { closed: { pos: [-14, 9, 17], target: [5.6, 0, 9], clip: { on: true, axis: 'h', offset: 0, flip: false }, marker: [6.0, 9.1, 0] } } },
   ametropia: { pos: [-33, 5, 1], target: [0, -1, -2], clip: { on: true, axis: 'h', offset: 0, flip: false }, rays: true, marker: [0, -10.3, 0], short: 'Рефракция' },
   keratoconus: { pos: [-20, 4, 17], target: [0, 0, 10.5], clip: { on: true, axis: 'h', offset: 0, flip: false }, marker: [0, 12.7, 0], short: 'Кератоконус' },
+  astigmatism: { pos: [-22, 16, 24], target: [0, 0, 9], clip: { on: false }, rays: true, marker: [0, 12.7, 0], short: 'Астигматизм' },
   detachment: { pos: [4, 1, 3], target: [-6.5, -1.5, -8], clip: { on: false }, marker: [-4.6, -7.9, 1.5], short: 'Отслойка' },
   amd:       { pos: [0, 0.5, 5], target: [0, 0, -10.2], clip: { on: false }, marker: [0, -10.1, 0], short: 'ВМД' },
   diabetic:  { pos: [0.5, 0, 6], target: [0.3, 0, -10], clip: { on: false }, marker: [-2.0, -9.7, 1.5], short: 'Ретинопатия' },
@@ -567,52 +577,57 @@ const CONDITION_VIEWS = {
 // Что именно меняется у каждой затронутой структуры при движении ползунков. affects здесь уточняет список из CONDITIONS,
 // byType — вариант для формы болезни (ключ совпадает со значением options).
 const CONDITION_CHANGES = {
-  cataract: { changes: {
+  cataract: { context: ['cornea', 'iris', 'sclera', 'anterior_chamber', 'vitreous'], changes: {
     lens: 'мутнеет и желтеет, пропускает меньше света; при кортикальной форме в коре появляются спицы, при задней субкапсулярной — бляшка у задней капсулы',
     lens_nucleus: 'уплотняется и темнеет при ядерной форме', _note: 'В окне «Как видит пациент» падает чёткость и контраст, появляется ослепление от света.' } },
   glaucoma: {
     affects: ['trabecular', 'schlemm', 'anterior_chamber', 'disc', 'lamina_cribrosa', 'optic_nerve'],
+    context: ['sclera', 'retina', 'retinal_arteries', 'retinal_veins', 'cornea', 'iris', 'nerve_sheath'],
     changes: {
       trabecular: 'засоряется и темнеет с ростом ВГД — отток влаги падает', schlemm: 'спадается, темнеет',
       anterior_chamber: 'глубина не меняется, но давление влаги растёт', disc: 'экскавация расширяется и углубляется с ростом Э/Д',
       lamina_cribrosa: 'прогибается назад под давлением', optic_nerve: 'бледнеет — волокна гибнут', _note: 'Ползунок ВГД управляет трабекулой, каналом и решётчатой пластинкой; ползунок Э/Д — диском и нервом. Поле зрения сужается в окне «Как видит пациент».' },
     byType: { closed: {
       affects: ['iris', 'posterior_chamber', 'anterior_chamber', 'trabecular', 'cornea', 'sclera', 'disc', 'optic_nerve'],
+      context: ['lens', 'ciliary', 'zonule', 'retina'],
       changes: {
         iris: 'корень выпячивается вперёд и закрывает угол', posterior_chamber: 'влага задерживается за радужкой — зрачковый блок',
         anterior_chamber: 'мельчает у периферии', trabecular: 'перекрыта корнем радужки',
         cornea: 'отекает и мутнеет при остром приступе (ВГД выше 30)', sclera: 'краснеет от застойных сосудов при приступе',
         disc: 'экскавация растёт при затяжном течении', optic_nerve: 'бледнеет', _note: 'Смотрите на угол камеры сбоку в разрезе: корень радужки прижимается к роговице.' } } } },
-  ametropia: { affects: ['sclera', 'choroid', 'retina', 'vitreous'], changes: {
+  ametropia: { affects: ['sclera', 'choroid', 'retina', 'vitreous'], context: ['cornea', 'lens', 'iris', 'optic_nerve', 'macula'], changes: {
     sclera: 'задний отдел удлиняется при близорукости (0,35 мм на дптр) или укорачивается при дальнозоркости', choroid: 'растягивается и истончается вместе со склерой',
     retina: 'отодвигается от фокуса — лучи сходятся перед ней или за ней', vitreous: 'полость растягивается', _note: 'Полупрозрачный контур — глаз нормальной длины для сравнения. Жёлтые лучи показывают, куда попадает фокус.' } },
-  keratoconus: { changes: { cornea: 'центр истончается и выпячивается конусом, лучи рассеиваются' } },
-  detachment: { changes: {
+  keratoconus: { context: ['sclera', 'iris', 'lens', 'anterior_chamber'], changes: { cornea: 'центр истончается и выпячивается конусом, лучи рассеиваются' } },
+  astigmatism: { context: ['sclera', 'iris', 'lens', 'anterior_chamber'], changes: {
+    cornea: 'в сильном меридиане кривизна больше, в слабом меньше — купол вытянут, как бок ложки (на модели преувеличено в несколько раз)',
+    _note: 'Жёлтые лучи в двух плоскостях сходятся в разных точках: две фокальные линии вместо одного фокуса. Очки с цилиндром сводят их в одну.' } },
+  detachment: { context: ['sclera', 'disc', 'macula', 'retinal_arteries', 'retinal_veins'], changes: {
     retina: 'лоскут отходит от сосудистой оболочки, под ним скапливается жидкость', vitreous: 'тянет сетчатку тяжами', choroid: 'обнажается под отслоённым участком' } },
-  amd: { affects: ['macula', 'rpe', 'choroid', 'retina'], changes: {
+  amd: { affects: ['macula', 'rpe', 'choroid', 'retina'], context: ['retinal_arteries', 'retinal_veins', 'disc', 'sclera'], changes: {
     macula: 'сухая форма: друзы и бледные участки атрофии; влажная: отёк', rpe: 'под эпителием накапливаются друзы, клетки атрофируются',
     choroid: 'влажная форма: новые сосуды прорастают из хориоидеи под сетчатку', retina: 'кровоизлияние под сетчаткой при влажной форме' } },
-  diabetic: { changes: {
+  diabetic: { context: ['disc', 'sclera', 'choroid'], changes: {
     retinal_arteries: 'микроаневризмы на стенках', retinal_veins: 'расширяются, становятся чётковидными', retina: 'точечные кровоизлияния и твёрдые экссудаты',
     macula: 'отёк при стадии выше 40 %', vitreous: 'новообразованные сосуды у диска после 70 %, кровь в стекловидном теле после 85 %' } },
-  crvo: { changes: { crv: 'закупорена, тёмная', retinal_veins: 'расширены и извиты', retina: 'пламевидные кровоизлияния по всему дну', macula: 'отёк' } },
-  congenital_cataract: { affects: ['lens', 'lens_nucleus'], changes: {
+  crvo: { context: ['disc', 'retinal_arteries', 'sclera', 'choroid'], changes: { crv: 'закупорена, тёмная', retinal_veins: 'расширены и извиты', retina: 'пламевидные кровоизлияния по всему дну', macula: 'отёк' } },
+  congenital_cataract: { affects: ['lens', 'lens_nucleus'], context: ['cornea', 'iris', 'sclera', 'anterior_chamber'], changes: {
     lens: 'тотальное белое, слоистое или ядерное помутнение', lens_nucleus: 'белое ядро при ядерной форме', _note: 'При плотном помутнении зрачок белый — лейкокория, видна спереди.' } },
-  rop: { changes: {
+  rop: { context: ['disc', 'sclera', 'choroid', 'macula'], changes: {
     retina: 'височная периферия без сосудов; на границе линия, затем вал', retinal_arteries: 'извиты и расширены при высоких стадиях (плюс-болезнь)',
     retinal_veins: 'извиты и расширены при высоких стадиях', vitreous: 'патологические сосуды с вала растут в стекловидное тело и тянут сетчатку; стадии 4–5 — отслойка' } },
-  congenital_glaucoma: { changes: {
+  congenital_glaucoma: { context: ['iris', 'lens', 'retina', 'optic_nerve', 'lid_upper', 'lid_lower'], changes: {
     cornea: 'увеличивается и мутнеет от отёка', sclera: 'растягивается, всё яблоко увеличивается (буфтальм)', trabecular: 'недоразвита, серая',
     anterior_chamber: 'углубляется вместе с ростом глаза', disc: 'экскавация растёт' } },
-  retinoblastoma: { affects: ['retina', 'vitreous'], changes: {
+  retinoblastoma: { affects: ['retina', 'vitreous'], context: ['sclera', 'retinal_arteries', 'retinal_veins', 'disc', 'macula'], changes: {
     retina: 'белый бугристый очаг с кальцинатами растёт из сетчатки', vitreous: 'отсевы опухоли плавают в стекловидном теле при большом размере' } },
-  strabismus: { changes: {
+  strabismus: { context: ['sclera', 'iris', 'lens', 'retina', 'rectus_sup', 'rectus_inf'], changes: {
     rectus_med: 'укорочена и напряжена при сходящемся косоглазии, растянута при расходящемся', rectus_lat: 'растянута при сходящемся, напряжена при расходящемся',
     macula: 'изображение предмета не попадает на фовеа', cornea: 'ось глаза отклонена от линии фиксации', _note: 'Красная линия — куда смотрит косящий глаз, серая — куда должен.' } },
-  ptosis: { changes: { lid_upper: 'опускается и перекрывает зрачок', levator: 'ослаблена, бледная' } },
-  nld_obstruction: { affects: ['lacrimal_drainage', 'lid_lower'], changes: {
+  ptosis: { context: ['cornea', 'iris', 'sclera', 'lid_lower', 'lacrimal'], changes: { lid_upper: 'опускается и перекрывает зрачок', levator: 'ослаблена, бледная' } },
+  nld_obstruction: { affects: ['lacrimal_drainage', 'lid_lower'], context: ['sclera', 'cornea', 'iris', 'lid_upper', 'lacrimal', 'conjunctiva'], changes: {
     lacrimal_drainage: 'мешок раздут застоявшейся слезой, у клапана Гаснера пробка', lid_lower: 'у края века стоит слёзное озеро' } },
-  amblyopia: { affects: ['macula'], changes: { macula: 'анатомически не изменена; на модели показана бледной условно — мозг подавляет изображение с этого глаза', _note: 'Главное изменение в окне «Как видит пациент»: размытая блёклая картинка при здоровом глазе.' } },
+  amblyopia: { affects: ['macula'], context: ['sclera', 'cornea', 'iris', 'retina', 'disc'], changes: { macula: 'анатомически не изменена; на модели показана бледной условно — мозг подавляет изображение с этого глаза', _note: 'Главное изменение в окне «Как видит пациент»: размытая блёклая картинка при здоровом глазе.' } },
 };
 
 // Элементы патологии, которые появляются на модели при включении состояний: название и описание для плашек и карточек
@@ -671,7 +686,8 @@ const PARENT_SIGNS = [
   { sign: 'Слезостояние и гной в углу глаза с первых недель без покраснения', conds: ['nld_obstruction'] },
   { sign: 'Большие «красивые» глаза, мутная роговица, светобоязнь и слезотечение', conds: ['congenital_glaucoma'], urgent: true },
   { sign: 'Ребёнок родился до 32 недель или с массой до 1500 г', conds: ['rop'], urgent: true },
-  { sign: 'Прищуривается, подходит близко к экрану, наклоняет голову, жалуется на усталость глаз', conds: ['ametropia', 'amblyopia'] },
+  { sign: 'Прищуривается, подходит близко к экрану, наклоняет голову, жалуется на усталость глаз', conds: ['ametropia', 'astigmatism', 'amblyopia'] },
+  { sign: 'У подростка быстро растёт близорукость с астигматизмом, очки перестают помогать через месяцы, часто трёт глаза', conds: ['keratoconus'] },
   { sign: 'Не следит за лицом и игрушкой к 3 месяцам, глаза «плавают» или дрожат', conds: ['congenital_cataract', 'amblyopia'], urgent: true },
   { sign: 'Один глаз видит заметно хуже другого при проверке в 3 года', conds: ['amblyopia'] },
 ];

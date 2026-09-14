@@ -100,7 +100,7 @@
     return cap;
   }
 
-  const params = { elong: 0, cone: 0, cdr: 0.3, bombe: 0, pupil: E.pupil, limbScale: 1, lensThick: 1, ptosis: 0, physHyper: 0, atrophy: 0 };
+  const params = { elong: 0, cone: 0, cdr: 0.3, bombe: 0, pupil: E.pupil, limbScale: 1, lensThick: 1, ptosis: 0, physHyper: 0, atrophy: 0, astig: 0, astigAxis: 0, cyl: 0 };
   const meshes = EyeModel.build((id, opts) => baseMaterial(byId[id], opts), params);
   const structureMeshes = [];
   STRUCTURES.forEach(def => {
@@ -112,7 +112,7 @@
       mesh.name = id; mesh.userData.id = id; if (noCap) mesh.userData.noCap = true;
     }
     (isGlobe(def) ? globeLocal : eyeGroup).add(mesh);
-    const entry = { def, mesh, detail: null, useDetail: true, visible: true, stencils: [], cap: null, order: -1, baseOpacity: def.opacity };
+    const entry = { def, mesh, detail: null, useDetail: true, visible: true, focusHidden: false, stencils: [], cap: null, order: -1, baseOpacity: def.opacity };
     if (!mesh.userData.noCap) {
       entry.order = orderCounter; orderCounter += 2;
       entry.stencils = makeStencil(mesh, entry.order);
@@ -129,10 +129,10 @@
 
   // Детализированные меши из Blender
   function refreshVisibility(e) {
-    const useD = !!e.detail && e.useDetail;
-    e.mesh.visible = e.visible && !useD;
-    if (e.detail) e.detail.visible = e.visible && useD;
-    if (e.cap) e.cap.visible = e.visible && clip.on;
+    const useD = !!e.detail && e.useDetail, shown = e.visible && !e.focusHidden;
+    e.mesh.visible = shown && !useD;
+    if (e.detail) e.detail.visible = shown && useD;
+    if (e.cap) e.cap.visible = shown && clip.on;
   }
   function setDetailUse(id, use) { const e = S[id]; if (!e || e.useDetail === use) return; e.useDetail = use; refreshVisibility(e); }
   function attachDetail(id, geometry) {
@@ -198,21 +198,27 @@
   const rayMat = new THREE.LineBasicMaterial({ color: 0xffc83d });
   const focusDot = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 8), new THREE.MeshBasicMaterial({ color: 0xffc83d }));
   raysGroup.add(focusDot);
-  const rayLines = [];
+  const rayLines = [], rayLinesV = [];
+  const rayMatV = new THREE.LineBasicMaterial({ color: 0xff9a3d });
   for (let i = 0; i < 7; i++) { const l = new THREE.Line(new THREE.BufferGeometry(), rayMat); raysGroup.add(l); rayLines.push(l); }
+  for (let i = 0; i < 7; i++) { const l = new THREE.Line(new THREE.BufferGeometry(), rayMatV); l.visible = false; raysGroup.add(l); rayLinesV.push(l); }
+  const focusDotV = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 8), new THREE.MeshBasicMaterial({ color: 0xff9a3d })); focusDotV.visible = false; raysGroup.add(focusDotV);
   function updateRays() {
     const yF = -E.R_ret - (cond.ametropia.on ? 0 : params.physHyper * 0.35), yRet = -E.R_ret - params.elong;
-    focusDot.position.set(0, yF, 0);
-    rayLines.forEach((line, i) => {
-      const x = -3.6 + i * 1.2;
+    const yF2 = yF + params.cyl * 0.35; // при астигматизме второй меридиан фокусируется раньше: две фокальные линии
+    focusDot.position.set(0, yF, 0); focusDotV.position.set(0, yF2, 0); focusDotV.visible = params.cyl > 0;
+    const a = EyeModel.lensArcs(1, params.lensThick);
+    const build = (line, x, focusY, horizontal) => {
       const yc = E.c_ca + Math.sqrt(Math.max(0, E.R_ca * E.R_ca - x * x));
-      const a = EyeModel.lensArcs(1, params.lensThick);
       const xl = x * 0.86, yl = a.ca + Math.sqrt(Math.max(0, a.Ra * a.Ra - xl * xl));
-      const jitter = params.cone * (i % 2 ? 0.6 : -0.6) * Math.abs(x) * 0.3;
-      const t = (yRet - yl) / (yF - yl);
+      const jitter = params.cone * (Math.round(x) % 2 ? 0.6 : -0.6) * Math.abs(x) * 0.3;
+      const t = (yRet - yl) / (focusY - yl);
       const xe = xl + (0 + jitter - xl) * t;
-      line.geometry.dispose(); line.geometry = new THREE.BufferGeometry().setFromPoints([V3(x, 34, 0), V3(x, yc, 0), V3(xl, yl, 0), V3(xe, yRet, 0)]);
-    });
+      const P = horizontal ? (px, py) => V3(px, py, 0) : (px, py) => V3(0, py, px);
+      line.geometry.dispose(); line.geometry = new THREE.BufferGeometry().setFromPoints([P(x, 34), P(x, yc), P(xl, yl), P(xe, yRet)]);
+    };
+    rayLines.forEach((line, i) => build(line, -3.6 + i * 1.2, yF, true));
+    rayLinesV.forEach((line, i) => { line.visible = params.cyl > 0; if (line.visible) build(line, -3.6 + i * 1.2, yF2, false); });
   }
   // Зрительная ось глаза и линия фиксации (для косоглазия)
   const gazeGroup = new THREE.Group(); gazeGroup.visible = false; eyeGroup.add(gazeGroup);
@@ -277,11 +283,11 @@
   const normGroup = new THREE.Group(); eyeGroup.add(normGroup);
   const normMat = new THREE.MeshStandardMaterial({ color: 0x1fb6ff, emissive: 0x0b4d6e, transparent: true, opacity: 0.34, depthWrite: false, side: THREE.DoubleSide, clippingPlanes: [clipPlane], roughness: 0.4 });
   const normGhosts = {};
-  const NORM_DEPS = { sclera: ['elong', 'limbScale', 'angle', 'g'], cornea: ['cone', 'limbScale', 'angle', 'g'], choroid: ['elong', 'g'], retina: ['elong', 'g'], vitreous: ['elong'], macula: ['elong'], iris: ['bombe', 'angle'], anterior_chamber: ['bombe'], disc: ['cdr', 'elong'], optic_nerve: ['atrophy', 'elong'], lid_upper: ['ptosis'] };
+  const NORM_DEPS = { sclera: ['elong', 'limbScale', 'angle', 'g'], cornea: ['cone', 'limbScale', 'angle', 'g', 'astig'], choroid: ['elong', 'g'], retina: ['elong', 'g'], vitreous: ['elong'], macula: ['elong'], iris: ['bombe', 'angle'], anterior_chamber: ['bombe'], disc: ['cdr', 'elong'], optic_nerve: ['atrophy', 'elong'], lid_upper: ['ptosis'] };
   const NORM_BUILD = { sclera: p => EyeModel.geo.sclera(p), cornea: p => EyeModel.geo.cornea(p), choroid: p => EyeModel.geo.choroid(p), retina: p => EyeModel.geo.retina(p), vitreous: p => EyeModel.geo.vitreous(p), macula: p => EyeModel.geo.macula(p), iris: p => EyeModel.geo.iris(p), anterior_chamber: p => EyeModel.geo.anterior_chamber(p), disc: p => EyeModel.geo.disc(p), optic_nerve: p => EyeModel.geo.optic_nerve(p), lid_upper: () => EyeModel.lidGeometry(true, 0) };
   let normKey = '';
   function updateNormGhosts(ap, extra) {
-    const np = { elong: 0, cone: 0, cdr: 0.3, bombe: 0, pupil: ap.pupil, limbScale: ap.limb, lensThick: ap.lensThick, ptosis: 0, atrophy: 0, angle: 0, g: 1 };
+    const np = { elong: 0, cone: 0, cdr: 0.3, bombe: 0, pupil: ap.pupil, limbScale: ap.limb, lensThick: ap.lensThick, ptosis: 0, atrophy: 0, angle: 0, g: 1, astig: 0, astigAxis: 0 };
     const cur = Object.assign({}, params, extra);
     const changed = Object.keys(NORM_DEPS).filter(id => S[id] && S[id].visible && NORM_DEPS[id].some(k => Math.abs((cur[k] || 0) - (np[k] || 0)) > 1e-6));
     const key = changed.join(',') + '|' + JSON.stringify(np);
@@ -356,7 +362,8 @@
       conditionView(c).affects.forEach(a => setVisible(a, true));
       (c.show || []).forEach(a => setVisible(a, true)); // структуры для контекста, без подсветки
       if (c.group === 'child' && !isChild() && !opts.keepAge) setAgeByYears(c.typicalAge || 3);
-      const wrap = document.querySelector(`.cond-group[data-grp="${c.group}"]`); if (wrap) wrap.classList.remove('collapsed');
+      const grp = (c.groups || [c.group]).includes(isChild() ? 'child' : 'adult') ? (isChild() ? 'child' : 'adult') : c.group;
+      const wrap = document.querySelector(`.cond-group[data-grp="${grp}"]`); if (wrap) wrap.classList.remove('collapsed');
       if (ui.fly && !opts.noFly) flyToCondition(id);
       pulse.until = performance.now() + 2600;
       // после подлёта проигрываем переход от нормы к выбранной степени, чтобы изменение было видно в движении
@@ -444,6 +451,8 @@
     params.ptosis = c.ptosis.on ? c.ptosis.drop : 0;
     params.physHyper = ap.hyper;
     params.atrophy = c.glaucoma.on ? Math.min(1, (c.glaucoma.cdr - 0.3) / 0.65) : cg * 0.6; // истончение зрительного нерва
+    params.cyl = c.astigmatism.on ? c.astigmatism.cyl : 0;
+    params.astig = params.cyl * 0.06; params.astigAxis = c.astigmatism.on ? c.astigmatism.axis : 0; // преувеличено ради наглядности
     // масштаб: возраст — весь глаз с орбитой, буфтальм — только яблоко
     eyeGroup.scale.setScalar(ap.s); detailGroup.scale.setScalar(ap.s);
     const g = 1 + 0.22 * cg; globeLocal.scale.setScalar(g); globeWorld.scale.setScalar(g);
@@ -467,7 +476,7 @@
     setDetailUse('lid_upper', params.ptosis === 0);
     setDetailUse('optic_nerve', params.elong === 0 && params.atrophy === 0);
     setDetailUse('nerve_sheath', params.elong === 0);
-    const key = [params.elong, params.cone, params.cdr, params.bombe, params.pupil, params.limbScale, params.lensThick, params.ptosis, params.atrophy].join('|');
+    const key = [params.elong, params.cone, params.cdr, params.bombe, params.pupil, params.limbScale, params.lensThick, params.ptosis, params.atrophy, params.astig, params.astigAxis].join('|');
     if (key !== lastGeoKey) {
       const prev = lastGeoKey.split('|');
       const elongChanged = prev[0] !== String(params.elong);
@@ -694,6 +703,7 @@
     const rb = c.retinoblastoma.on ? c.retinoblastoma.severity / 100 : 0;
     const rop = c.rop.on ? c.rop.stage : 0;
     const strab = c.strabismus.on ? Math.abs(c.strabismus.angle) / 30 : 0;
+    const ast = c.astigmatism.on ? c.astigmatism.cyl / 6 : 0, astAx = c.astigmatism.on ? c.astigmatism.axis * Math.PI / 180 : 0;
     const pt = c.ptosis.on ? c.ptosis.drop / 7 : 0;
     const nld = c.nld_obstruction.on ? c.nld_obstruction.severity / 100 : 0;
     const amb = c.amblyopia.on ? c.amblyopia.severity / 100 : 0;
@@ -704,9 +714,10 @@
     const bright = 1 + 0.35 * cat * (ct === 'psc' ? 1 : ct === 'cortical' ? 0.6 : 0.25) + 0.3 * cc + 0.2 * cg;
     const sat = 1 - 0.5 * amb;
     pvCanvas.style.filter = `blur(${blur.toFixed(1)}px) sepia(${sepia.toFixed(2)}) contrast(${Math.max(0.2, contrast).toFixed(2)}) brightness(${bright.toFixed(2)}) saturate(${sat.toFixed(2)})`;
-    const ghost = cone * 0.6 + (ct === 'cortical' ? cat * 0.35 : 0) + strab * 0.55;
+    const ghost = cone * 0.6 + (ct === 'cortical' ? cat * 0.35 : 0) + strab * 0.55 + ast * 0.7;
     pvGhost.style.opacity = ghost.toFixed(2);
-    pvGhost.style.transform = `translate(${(cone * 10 + (ct === 'cortical' ? cat * 5 : 0) + strab * 60).toFixed(1)}px, ${(cone * 5).toFixed(1)}px)`;
+    // при астигматизме изображение «тянется» вдоль слабого меридиана
+    pvGhost.style.transform = `translate(${(cone * 10 + (ct === 'cortical' ? cat * 5 : 0) + strab * 60 + ast * 9 * Math.cos(astAx)).toFixed(1)}px, ${(cone * 5 - ast * 9 * Math.sin(astAx)).toFixed(1)}px)`;
     pvGhost.style.filter = pvCanvas.style.filter;
     const glare = Math.max(cat * (ct === 'psc' ? 1 : 0.7), cg * 0.9);
     $('#ovGlare').style.background = glare > 0 ? `radial-gradient(circle at 84% 17%, rgba(255,255,255,${(0.9 * glare).toFixed(2)}) 0, rgba(255,255,230,${(0.5 * glare).toFixed(2)}) ${Math.round(8 + 30 * glare)}%, transparent ${Math.round(20 + 60 * glare)}%)` : 'none';
@@ -732,6 +743,7 @@
     if (cc) notes.push('Врождённая катаракта: ребёнок видит только свет и тени, зрительная кора не развивается.');
     if (D) notes.push(c.ametropia.diopters < 0 ? 'Близорукость без очков: вдаль размыто.' : 'Дальнозоркость без очков: нечётко и утомительно.');
     if (cone) notes.push('Кератоконус: двоение и искажения.');
+    if (ast) notes.push('Астигматизм: линии одного направления размыты, буквы «тянутся» в сторону.');
     if (gk) notes.push('Глаукома: выпадение периферии поля зрения.');
     if (cg) notes.push('Врождённая глаукома: туман из-за отёка роговицы, ореолы и светобоязнь.');
     if (det) notes.push('Отслойка: тёмная «занавеска» с одной стороны.');
@@ -786,16 +798,21 @@
     document.querySelectorAll('.row').forEach(r => { r.querySelector('.schk').checked = S[r.dataset.id].visible; r.classList.toggle('sel', r.dataset.id === selectedId); });
     updateLabels();
   }
+  // В режиме проблемы: затронутое ярко, несколько соседних структур бледно для ориентира, остальные слои скрыты
+  const DEFAULT_CONTEXT = ['sclera', 'cornea', 'retina', 'iris'];
   function applyOpacity() {
     const F = focusSet();
+    const ctx = F ? new Set(conditionView(condById[focus.cond]).context || DEFAULT_CONTEXT) : null;
     STRUCTURES.forEach(s => {
       const e = S[s.id];
       let op = Math.min(1, e.baseOpacity) * groupOpacity[s.group];
-      let emissive = 0;
+      let emissive = 0, hide = false;
       if (F) {
-        if (F.has(s.id)) { op = Math.min(1, Math.max(op, e.baseOpacity < 1 ? e.baseOpacity + 0.3 : 1)); emissive = 0x2e1c08; }
-        else op = Math.min(op, GHOST);
+        if (F.has(s.id)) { op = Math.min(1, Math.max(op, e.baseOpacity < 1 ? e.baseOpacity + 0.4 : 1)); emissive = 0x3a2208; }
+        else if (ctx.has(s.id) || s.id === selectedId) op = Math.min(op, 0.22);
+        else hide = true;
       }
+      if (e.focusHidden !== hide) { e.focusHidden = hide; refreshVisibility(e); }
       if (s.id === selectedId) emissive = 0x3a3a3a;
       const m = e.mesh.material;
       m.opacity = op; m.transparent = op < 1; m.depthWrite = op >= 0.5; m.emissive.setHex(emissive); m.needsUpdate = true;
@@ -859,7 +876,7 @@
   function buildConditions() {
     const root = $('#condList'); root.innerHTML = '';
     [['adult', 'Взрослый глаз'], ['child', 'Детский глаз']].forEach(([grp, title]) => {
-      const list = CONDITIONS.filter(c => c.group === grp);
+      const list = CONDITIONS.filter(c => (c.groups || [c.group]).includes(grp));
       const wrap = document.createElement('div'); wrap.className = 'cond-group'; wrap.dataset.grp = grp;
       const h = document.createElement('div'); h.className = 'sub-title';
       h.innerHTML = `<span>${title} <span class="cnt">(${list.length})</span></span><span class="tw">▾</span>`;
@@ -882,7 +899,7 @@
         if (c.signs) html += `<p class="sym parents"><b>Родителям:</b> ${c.signs}</p>`;
         body.innerHTML = html;
         head.querySelector('.con').addEventListener('change', (e) => {
-          cond[c.id].on = e.target.checked; box.classList.toggle('on', e.target.checked); applyConditions();
+          cond[c.id].on = e.target.checked; syncCondBoxes(c.id); applyConditions();
           setFocus(e.target.checked ? c.id : (focus.cond === c.id ? nextEnabledCond(c.id) : focus.cond), { demo: e.target.checked });
         });
         head.querySelector('.name').addEventListener('click', () => {
@@ -905,14 +922,18 @@
     renderConditionNotes();
     syncCondGroups();
   }
+  // Одна проблема может стоять в обеих группах — состояние одно, блоки синхронизируются
+  const boxesOf = (id) => [...document.querySelectorAll(`.cond[data-cond="${id}"]`)];
+  function syncCondBoxes(id) { boxesOf(id).forEach(b => { b.querySelector('.con').checked = !!cond[id].on; b.classList.toggle('on', !!cond[id].on); }); }
+  // Блок проблемы в раскрытой группе, иначе первый
+  const visibleBox = (id) => boxesOf(id).find(b => !b.closest('.cond-group').classList.contains('collapsed')) || boxesOf(id)[0];
   // Группа проблем другого возраста сворачивается; развернуть можно вручную щелчком по заголовку
   function syncCondGroups() {
     document.querySelectorAll('.cond-group').forEach(w => w.classList.toggle('collapsed', (w.dataset.grp === 'child') !== isChild()));
   }
   function fmt(v, p) { return (p.step < 1 ? v.toFixed(2).replace(/0+$/, '').replace(/\.$/, '') : Math.round(v)) + p.unit; }
   function renderConditionNotes() {
-    CONDITIONS.forEach(c => {
-      const box = document.querySelector(`.cond[data-cond="${c.id}"]`); if (!box) return;
+    CONDITIONS.forEach(c => boxesOf(c.id).forEach(box => {
       // список затронутого и пояснения «что меняется» зависят от формы болезни
       const cv = conditionView(c), ck = c.id + '|' + (c.options ? cond[c.id][c.options.id] : '');
       if (box.dataset.ck !== ck) {
@@ -933,11 +954,12 @@
       else if (c.id === 'strabismus') { const a = cond.strabismus.angle; note.textContent = a === 0 ? 'Оси параллельны.' : a > 0 ? `Сходящееся косоглазие (эзотропия) ${a}°: глаз отклонён к носу, красная ось — куда смотрит косящий глаз, серая — куда должен.` : `Расходящееся косоглазие (экзотропия) ${-a}°: глаз отклонён к виску.`; }
       else if (c.id === 'rop') note.textContent = ['', 'Стадия 1: тонкая демаркационная линия между сосудистой и бессосудистой сетчаткой.', 'Стадия 2: линия превращается в вал.', 'Стадия 3: на валу растут патологические сосуды — порог для лечения (лазер, анти-VEGF).', 'Стадия 4: частичная тракционная отслойка сетчатки.', 'Стадия 5: тотальная отслойка, «воронка».'][cond.rop.stage] || '';
       else if (c.id === 'ptosis') { const d = cond.ptosis.drop; note.textContent = d >= 4.6 ? `Край века ниже центра зрачка на ${(d - 4.6).toFixed(1)} мм: зрачок перекрыт, риск амблиопии.` : `Край века на ${(4.6 - d).toFixed(1)} мм выше центра зрачка.`; }
+      else if (c.id === 'astigmatism') { const v = cond.astigmatism; note.textContent = v.cyl === 0 ? 'Роговица сферична, один фокус.' : `Цилиндр ${v.cyl} дптр, сильный меридиан ${v.axis}°: фокальные линии разнесены примерно на ${(v.cyl * 0.35).toFixed(1)} мм${v.cyl >= 1.5 ? '; у ребёнка старше 3 лет это показание к очкам' : ''}.`; }
       else note.textContent = '';
-    });
+    }));
   }
   function enableCondition(id) {
-    const box = document.querySelector(`.cond[data-cond="${id}"]`); if (!box) return;
+    const box = visibleBox(id); if (!box) return;
     const chk = box.querySelector('.con');
     if (!chk.checked) { chk.checked = true; chk.dispatchEvent(new Event('change')); } else setFocus(id);
     box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -947,7 +969,7 @@
   let demoTimer = null;
   function demo(id) {
     const c = condById[id], p = c.params[0]; if (!p) return;
-    if (!cond[id].on) { const chk = document.querySelector(`.cond[data-cond="${id}"] .con`); chk.checked = true; chk.dispatchEvent(new Event('change')); }
+    if (!cond[id].on) { const chk = visibleBox(id).querySelector('.con'); chk.checked = true; chk.dispatchEvent(new Event('change')); }
     const end = cond[id][p.id];
     const start = p.id === 'cdr' ? 0.3 : p.id === 'stage' ? 1 : p.min > 0 ? p.min : 0;
     if (demoTimer) cancelAnimationFrame(demoTimer);
@@ -1137,9 +1159,8 @@
     setClip: (o) => { Object.assign(clip, o); updateClipPlane(); updateLabels(); },
     setCondition: (id, values) => {
       if (!cond[id]) return; Object.assign(cond[id], values);
-      const box = document.querySelector(`.cond[data-cond="${id}"]`);
-      if (box) { box.querySelector('.con').checked = !!cond[id].on; box.classList.toggle('on', !!cond[id].on);
-        const sel = box.querySelector('.copt'); const c = condById[id]; if (sel && c.options) sel.value = cond[id][c.options.id]; }
+      syncCondBoxes(id);
+      boxesOf(id).forEach(box => { const sel = box.querySelector('.copt'); const c = condById[id]; if (sel && c.options) sel.value = cond[id][c.options.id]; });
       applyConditions();
       if (values.on) setFocus(id, { demo: !!values.demo }); else if (values.on === false && focus.cond === id) setFocus(nextEnabledCond(id));
     },
