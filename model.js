@@ -146,13 +146,16 @@ const EyeModel = (() => {
     return lathe(elongate(pts, p.elong));
   };
 
-  geo.anterior_chamber = () => {
-    const a = lensArcs(1);
-    const aP = Math.acos(E.pupil / a.Ra);
+  // Передняя камера: задняя стенка повторяет переднюю поверхность радужки (при бомбаже камера мельчает)
+  geo.anterior_chamber = (p = {}) => {
+    const a = lensArcs(1), b = p.bombe || 0, rp = p.pupil || E.pupil, r1 = 6.1;
+    const aP = Math.acos(rp / a.Ra);
     const lensFront = arc(0, a.ca, a.Ra, Math.PI / 2, aP, 16);   // от оси к зрачковому краю по хрусталику
+    const irisFront = [];
+    for (let i = 0; i <= 10; i++) { const t = i / 10, r = rp + (r1 - rp) * t; irisFront.push([r, 9.45 - 0.4 * t + b * Math.sin(Math.PI * Math.min(1, t * 1.15)) * 1.1]); }
     const ai = angAt(E.R_cp, 5.5);
     const corneaBack = arc(0, E.c_cp, E.R_cp, ai, Math.PI / 2, 40); // от угла к оси по задней роговице
-    const pts = [...lensFront, [E.pupil, 9.45], [6.1, 9.05], ...corneaBack, lensFront[0]];
+    const pts = [...lensFront, ...irisFront, ...corneaBack, lensFront[0]];
     return lathe(pts);
   };
 
@@ -424,7 +427,7 @@ const EyeModel = (() => {
     add('lens', geo.lens(params));
     add('lens_nucleus', geo.lens_nucleus(params));
     add('vitreous', geo.vitreous(params));
-    add('anterior_chamber', geo.anterior_chamber());
+    add('anterior_chamber', geo.anterior_chamber(params));
     add('posterior_chamber', geo.posterior_chamber());
     add('trabecular', geo.trabecular());
     add('schlemm', geo.schlemm(), { noCap: true });

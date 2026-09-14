@@ -5,7 +5,14 @@
   const DEG = Math.PI / 180;
   const E = EyeModel.E;
   const byId = {}; STRUCTURES.forEach(s => byId[s.id] = s);
-  const condById = {}; CONDITIONS.forEach(c => { Object.assign(c, CONDITION_VIEWS[c.id] || {}); c.group = c.group || 'adult'; condById[c.id] = c; });
+  const condById = {};
+  CONDITIONS.forEach(c => {
+    const v = CONDITION_VIEWS[c.id] || {}, ch = (typeof CONDITION_CHANGES !== 'undefined' && CONDITION_CHANGES[c.id]) || {};
+    Object.assign(c, v, ch);
+    const types = new Set([...Object.keys(v.byType || {}), ...Object.keys(ch.byType || {})]);
+    if (types.size) { c.byType = {}; types.forEach(t => c.byType[t] = Object.assign({}, (v.byType || {})[t], (ch.byType || {})[t])); }
+    c.group = c.group || 'adult'; condById[c.id] = c;
+  });
   const isGlobe = (def) => ['shell', 'inner'].includes(def.group) || ['retinal_arteries', 'retinal_veins'].includes(def.id);
 
   // ---------- Тема ----------
@@ -243,6 +250,8 @@
   // детские
   addPatho('rbMass', new THREE.BufferGeometry(), pmat(0xf3efd8, 1, { roughness: 0.45 }));
   addPatho('rbCalc', new THREE.SphereGeometry(0.11, 8, 6), pmat(0xffffff, 1), 24);
+  addPatho('rbSeeds', new THREE.SphereGeometry(0.16, 8, 6), pmat(0xf3efd8, 0.95), 40);
+  addPatho('traction', new THREE.BufferGeometry(), pmat(0xd9d2c4, 0.85));
   addPatho('ropZone', new THREE.BufferGeometry(), pmat(0xe9e2d6, 0.9));
   addPatho('ropRidge', new THREE.BufferGeometry(), pmat(0xd88a7a, 1));
   addPatho('ropTufts', new THREE.SphereGeometry(0.16, 8, 6), pmat(0xb32a2a, 1), 14);
@@ -269,7 +278,7 @@
   const PTS = {
     drusen: discPoints(80, 0, 0, 2.3, 11), microan: EyeModel.treeSamplePoints(60, 21), dotHem: discPoints(24, 1.0, 0, 6.5, 31),
     exudate: discPoints(90, -0.6, 0.3, 2.4, 41).filter(p => Math.hypot(p[0] + 0.6, p[1] - 0.3) > 0.9).slice(0, 50), flame: discPoints(110, 1.2, 0, 8.2, 51),
-    calc: discPoints(24, 0, 0, 1, 61),
+    calc: discPoints(24, 0, 0, 1, 61), seeds: discPoints(40, 0, 0, 1, 71),
   };
   function tangleGeometry(cu, cv, radiusMm, R, seed, n, tubeR) {
     const rnd = EyeModel.rng(seed), geos = [];
@@ -297,8 +306,7 @@
   const GHOST = 0.1;
   function focusSet() {
     if (!focus.cond || !cond[focus.cond] || !cond[focus.cond].on) return null;
-    const c = condById[focus.cond];
-    return new Set(c.affects);
+    return new Set(conditionView(condById[focus.cond]).affects);
   }
   function nextEnabledCond(except) {
     const list = CONDITIONS.map(c => c.id).filter(id => id !== except && cond[id].on);
@@ -310,7 +318,7 @@
     const on = !!id && cond[id].on;
     if (on) {
       const c = condById[id];
-      c.affects.forEach(a => setVisible(a, true));
+      conditionView(c).affects.forEach(a => setVisible(a, true));
       (c.show || []).forEach(a => setVisible(a, true)); // структуры для контекста, без подсветки
       if (c.group === 'child' && !isChild() && !opts.keepAge) setAgeByYears(c.typicalAge || 3);
       if (ui.fly && !opts.noFly) flyToCondition(id);
@@ -328,7 +336,11 @@
     const v = on ? conditionView(condById[focus.cond]) : null;
     markerObj.visible = !!(v && v.marker);
     markerDiv.style.display = markerObj.visible ? '' : 'none';
-    if (v && v.marker) { markerObj.position.set(...v.marker); if (focus.cond === 'ametropia') markerObj.position.y -= params.elong; markerDiv.textContent = v.short || condById[focus.cond].name; }
+    if (v && v.marker) {
+      markerObj.position.set(...v.marker); if (focus.cond === 'ametropia') markerObj.position.y -= params.elong;
+      const c = condById[focus.cond], p = c.params[0];
+      markerDiv.textContent = (v.short || c.name) + (p ? ' · ' + fmt(cond[c.id][p.id], p) : '');
+    }
   }
 
   // ---------- Полёт камеры ----------
@@ -396,16 +408,23 @@
     // масштаб: возраст — весь глаз с орбитой, буфтальм — только яблоко
     eyeGroup.scale.setScalar(ap.s); detailGroup.scale.setScalar(ap.s);
     const g = 1 + 0.22 * cg; globeLocal.scale.setScalar(g); globeWorld.scale.setScalar(g);
-    ghostGroup.visible = isChild();
-    // косоглазие: поворот яблока вокруг вертикальной оси
+    ghostGroup.visible = isChild() || params.elong !== 0; // контур нормального глаза для сравнения
+    // косоглазие: поворот яблока вокруг вертикальной оси; медиальная и латеральная мышцы напрягаются/растягиваются
     const angle = c.strabismus.on ? c.strabismus.angle * DEG : 0;
     globeLocal.rotation.z = -angle; globeWorld.rotation.y = angle;
     gazeGroup.visible = c.strabismus.on; visualAxis.visible = c.strabismus.on;
+    const sk = c.strabismus.on ? c.strabismus.angle / 30 : 0;
+    const tight = new THREE.Color(0x7e1f1e), slack = new THREE.Color(0xdcaaa6);
+    S.rectus_med.mesh.material.color.setHex(byId.rectus_med.color).lerp(sk > 0 ? tight : slack, Math.abs(sk));
+    S.rectus_lat.mesh.material.color.setHex(byId.rectus_lat.color).lerp(sk > 0 ? slack : tight, Math.abs(sk));
+    [S.rectus_med, S.rectus_lat].forEach(e => e.cap.material.color.copy(e.mesh.material.color).multiplyScalar(0.85));
+    // птоз: леватор бледнеет
+    S.levator.mesh.material.color.setHex(byId.levator.color).lerp(new THREE.Color(0xe0c2bd), Math.min(1, params.ptosis / 7));
+    S.levator.cap.material.color.copy(S.levator.mesh.material.color).multiplyScalar(0.85);
     // где детализация не может деформироваться — процедурная форма
-    ['choroid', 'retina', 'retinal_arteries'].forEach(id => setDetailUse(id, params.elong === 0));
+    ['choroid', 'retina'].forEach(id => setDetailUse(id, params.elong === 0));
     setDetailUse('sclera', params.elong === 0 && Math.abs(params.limbScale - 1) < 1e-3);
     setDetailUse('iris', params.bombe === 0 && Math.abs(params.pupil - E.pupil) < 1e-3);
-    setDetailUse('retinal_veins', params.elong === 0 && !(c.crvo.on && c.crvo.severity > 0));
     setDetailUse('lid_upper', params.ptosis === 0);
     const key = [params.elong, params.cone, params.cdr, params.bombe, params.pupil, params.limbScale, params.lensThick, params.ptosis].join('|');
     if (key !== lastGeoKey) {
@@ -413,7 +432,7 @@
       const elongChanged = prev[0] !== String(params.elong);
       lastGeoKey = key;
       EyeModel.setFundusElong(params.elong);
-      if (elongChanged) { setGeometry('retinal_arteries', EyeModel.retinalTree(false, {})); lastVeinKey = ''; lastDetachKey = ''; lastRbKey = ''; lastRopKey = ''; }
+      if (elongChanged) { lastVeinKey = ''; lastDetachKey = ''; lastRbKey = ''; lastRopKey = ''; }
       setGeometry('sclera', EyeModel.geo.sclera(params));
       setGeometry('choroid', EyeModel.geo.choroid(params));
       setGeometry('retina', EyeModel.geo.retina(params));
@@ -422,6 +441,7 @@
       setGeometry('macula', EyeModel.geo.macula(params));
       setGeometry('cornea', EyeModel.geo.cornea(params));
       setGeometry('iris', EyeModel.geo.iris(params));
+      setGeometry('anterior_chamber', EyeModel.geo.anterior_chamber(params));
       setGeometry('lens', EyeModel.geo.lens(params));
       setGeometry('lens_nucleus', EyeModel.geo.lens_nucleus(params));
       setGeometry('disc', EyeModel.geo.disc(params));
@@ -435,11 +455,24 @@
     }
     // --- глаукома и врождённая глаукома ---
     const gk = c.glaucoma.on ? Math.min(1, (c.glaucoma.cdr - 0.3) / 0.65) : cg * 0.6;
-    S.optic_nerve.mesh.material.color.copy(nerveBase).lerp(nervePale, gk * 0.8);
+    const kIop = c.glaucoma.on ? Math.max(0, Math.min(1, (c.glaucoma.iop - 21) / 24)) : 0;
+    const closed = c.glaucoma.on && c.glaucoma.type === 'closed';
+    const attack = closed ? Math.max(0, Math.min(1, (c.glaucoma.iop - 28) / 15)) : 0; // острый приступ
+    S.optic_nerve.mesh.material.color.copy(nerveBase).lerp(nervePale, Math.min(1, gk * 1.1));
     S.disc.mesh.material.color.setHex(byId.disc.color).lerp(new THREE.Color(0xf5e2cf), gk * 0.7);
+    // трабекула и шлеммов канал засоряются с ростом ВГД (открытоугольная форма), недоразвиты при врождённой глаукоме
+    S.trabecular.mesh.material.color.setHex(byId.trabecular.color).lerp(new THREE.Color(0x7f5b3c), closed ? 0 : kIop).lerp(new THREE.Color(0x9aa0a8), cg);
+    S.trabecular.cap.material.color.copy(S.trabecular.mesh.material.color).multiplyScalar(0.85);
+    S.schlemm.mesh.material.color.setHex(byId.schlemm.color).lerp(new THREE.Color(0x24285a), closed ? 0 : kIop);
+    // решётчатая пластинка прогибается назад под давлением
+    if (S.lamina_cribrosa.detail) S.lamina_cribrosa.detail.position.set(0.259, 0, -0.966).multiplyScalar(0.5 * Math.max(kIop, gk * 0.6));
+    // роговица отекает при врождённой глаукоме и остром приступе; склера краснеет при приступе
+    const haze = Math.max(cg * 0.9, attack * 0.8);
     const corneaM = S.cornea.mesh.material;
-    corneaM.color.copy(corneaBase).lerp(corneaHaze, cg * 0.9);
-    S.cornea.baseOpacity = byId.cornea.opacity + 0.5 * cg;
+    corneaM.color.copy(corneaBase).lerp(corneaHaze, haze);
+    S.cornea.baseOpacity = byId.cornea.opacity + 0.5 * haze;
+    S.sclera.mesh.material.color.setHex(byId.sclera.color).lerp(new THREE.Color(0xefcfc8), attack);
+    S.sclera.cap.material.color.copy(S.sclera.mesh.material.color).multiplyScalar(0.85);
 
     // --- катаракта взрослая и врождённая ---
     const cat = c.cataract.on ? c.cataract.severity / 100 : 0, ct = c.cataract.type;
@@ -477,6 +510,10 @@
     const nCalc = rb > 0.2 ? Math.min(Math.round(rb * 24), PTS.calc.length) : 0;
     if (nCalc) { const size = 0.5 + 2.2 * rb, cc0 = fundus(-3, -3, E.R_ret - 0.9 * size); for (let i = 0; i < nCalc; i++) { const p = PTS.calc[i]; placeSphere(patho.rbCalc, i, cc0.clone().add(V3((p[0]) * size * 0.9, (p[1]) * size * 0.9, (p[2] - 0.5) * size * 1.2)), 0.6 + p[2]); } }
     commit(patho.rbCalc, nCalc);
+    // отсевы опухоли в стекловидное тело при большом размере
+    const nSeed = rb > 0.5 ? Math.min(Math.round((rb - 0.5) * 40), PTS.seeds.length) : 0;
+    if (nSeed) { const size = 0.5 + 2.2 * rb, c0 = fundus(-3, -3, E.R_ret - 0.9 * size); for (let i = 0; i < nSeed; i++) { const p = PTS.seeds[i]; placeSphere(patho.rbSeeds, i, c0.clone().multiplyScalar(0.85 - 0.55 * p[2]).add(V3(p[0] * 3, p[1] * 3, (p[2] - 0.5) * 4)), 0.5 + p[2]); } }
+    commit(patho.rbSeeds, nSeed);
     // лейкокория: белый зрачок при плотной катаракте или крупной опухоли
     patho.leukocoria.visible = (cc > 0.5 && cct !== 'nuclear') || rb > 0.35;
     patho.leukocoria.material.opacity = Math.min(0.97, 0.5 + Math.max(cc, rb) * 0.5);
@@ -501,9 +538,15 @@
     const dk = lift.toFixed(2);
     if (dk !== lastDetachKey) {
       lastDetachKey = dk;
-      if (lift > 0) { const g3 = EyeModel.detachmentGeometries(lift); patho.flap.geometry.dispose(); patho.flap.geometry = g3.flap; patho.fluid.geometry.dispose(); patho.fluid.geometry = g3.fluid; }
+      if (lift > 0) {
+        const g3 = EyeModel.detachmentGeometries(lift); patho.flap.geometry.dispose(); patho.flap.geometry = g3.flap; patho.fluid.geometry.dispose(); patho.fluid.geometry = g3.fluid;
+        // витреоретинальные тяжи от лоскута в стекловидное тело
+        const top = fundus(-4.75, -1.75, E.R_ret - lift - 0.15);
+        patho.traction.geometry.dispose();
+        patho.traction.geometry = EyeModel.mergeGeos([0.7, -0.6].map(o => EyeModel.tube([top.clone().add(V3(o, 0, o * 0.4)), top.clone().multiplyScalar(0.62).add(V3(o * 1.5, 1.5, 0)), V3(0.6 + o, -1.0, 0.4)], 0.07, 20)));
+      }
     }
-    patho.flap.visible = lift > 0; patho.fluid.visible = lift > 0;
+    patho.flap.visible = lift > 0; patho.fluid.visible = lift > 0; patho.traction.visible = lift > 0.9;
 
     // --- ВМД ---
     const amd = c.amd.on ? c.amd.severity / 100 : 0, wet = c.amd.type === 'wet';
@@ -527,11 +570,25 @@
     for (let i = 0; i < nEx; i++) { const p = PTS.exudate[i]; placeOnFundus(patho.exudate, i, p[0], p[1], E.R_ret - 0.04, 0.7 + p[2] * 0.8, 0.7 + p[2] * 0.8, 0); }
     commit(patho.exudate, nEx);
     if (dr > 0.7) { patho.nvd.geometry.dispose(); patho.nvd.geometry = tangleGeometry(2.7, 0.2, 1.4 + (dr - 0.7) * 5, E.R_ret - 0.2, 9, 6, 0.05); patho.nvd.visible = true; } else patho.nvd.visible = false;
+    // кровь в стекловидном теле при тяжёлой стадии
+    const vh = Math.max(0, (dr - 0.85) / 0.15);
+    S.vitreous.mesh.material.color.setHex(byId.vitreous.color).lerp(new THREE.Color(0x8a2a2a), vh);
+    S.vitreous.baseOpacity = byId.vitreous.opacity + 0.35 * vh;
+    S.vitreous.cap.material.color.copy(S.vitreous.mesh.material.color).multiplyScalar(0.85);
 
-    // --- тромбоз ЦВС ---
+    // --- сосуды сетчатки: тромбоз ЦВС, диабет, плюс-болезнь при РН ---
     const crvo = c.crvo.on ? c.crvo.severity / 100 : 0;
-    const vk = crvo.toFixed(2);
-    if (vk !== lastVeinKey) { lastVeinKey = vk; setGeometry('retinal_veins', EyeModel.retinalTree(true, { dilate: 1.4 * crvo, tortuosity: crvo })); }
+    const ropK = ropStage >= 2 ? ropStage / 5 : 0;
+    const vDil = Math.max(1.4 * crvo, dr > 0.5 ? 0.5 * dr : 0, 0.3 * ropK), vTort = Math.max(crvo, 0.4 * ropK);
+    const aDil = 0.2 * ropK, aTort = 0.35 * ropK;
+    const vk = [vDil.toFixed(2), vTort.toFixed(2), aDil.toFixed(2), aTort.toFixed(2)].join('|');
+    if (vk !== lastVeinKey) {
+      lastVeinKey = vk;
+      setGeometry('retinal_veins', EyeModel.retinalTree(true, { dilate: vDil, tortuosity: vTort }));
+      setGeometry('retinal_arteries', EyeModel.retinalTree(false, { dilate: aDil, tortuosity: aTort }));
+    }
+    setDetailUse('retinal_veins', params.elong === 0 && vDil === 0 && vTort === 0);
+    setDetailUse('retinal_arteries', params.elong === 0 && aDil === 0 && aTort === 0);
     S.crv.mesh.material.color.copy(crvBase).lerp(crvDark, crvo);
     S.retinal_veins.mesh.material.color.setHex(byId.retinal_veins.color).lerp(crvDark, crvo * 0.8);
     const nFl = Math.min(Math.round(crvo * 80), PTS.flame.length, patho.flameHem.instanceMatrix.count);
@@ -541,7 +598,8 @@
     // --- макула: отёк при диабете/тромбозе/влажной ВМД; бледность при амблиопии условна ---
     const edema = Math.min(1, (dr > 0.4 ? dr * 0.8 : 0) + crvo * 0.9 + (wet ? amd : 0));
     const amb = c.amblyopia.on ? c.amblyopia.severity / 100 : 0;
-    S.macula.mesh.material.color.copy(macBase).lerp(macEdema, edema).lerp(macPale, amb * 0.5);
+    const atrophy = (!wet && amd > 0.5) ? (amd - 0.5) * 2 : 0; // географическая атрофия при сухой ВМД
+    S.macula.mesh.material.color.copy(macBase).lerp(macEdema, edema).lerp(new THREE.Color(0xe8d9c2), atrophy).lerp(macPale, amb * 0.8);
     S.macula.cap.material.color.copy(S.macula.mesh.material.color).multiplyScalar(0.85);
 
     // --- непроходимость носослёзного канала ---
@@ -757,8 +815,7 @@
         if (c.options) html += `<label>${c.options.label}</label><select class="copt">${c.options.values.map(v => `<option value="${v.id}">${v.label}</option>`).join('')}</select>`;
         c.params.forEach(p => { html += `<label>${p.label}<span class="val" data-p="${p.id}"></span></label><input type="range" class="cp" data-p="${p.id}" min="${p.min}" max="${p.max}" step="${p.step}" value="${p.def}">`; });
         html += `<div class="tools"><button class="btn demo" title="Плавно показать переход от нормы к выбранной степени">Показать изменение</button></div>`;
-        const chips = c.affects.filter(a => byId[a]).map(a => `<button data-s="${a}" title="Показать описание">${byId[a].name.replace(/\s*\(.*\)/, '')}</button>`).join('');
-        html += `<div class="chips"><span>Затронуто:</span>${chips}</div><p class="note"></p><p>${c.desc}</p><p class="sym"><b>Жалобы:</b> ${c.symptoms}</p>`;
+        html += `<div class="chips"></div><div class="changes"></div><p class="note"></p><p>${c.desc}</p><p class="sym"><b>Жалобы:</b> ${c.symptoms}</p>`;
         if (c.signs) html += `<p class="sym parents"><b>Родителям:</b> ${c.signs}</p>`;
         body.innerHTML = html;
         head.querySelector('.con').addEventListener('change', (e) => {
@@ -772,9 +829,13 @@
         });
         head.querySelector('.fly').addEventListener('click', (e) => { e.stopPropagation(); if (!cond[c.id].on) { const chk = head.querySelector('.con'); chk.checked = true; chk.dispatchEvent(new Event('change')); } else { setFocus(c.id); } });
         const sel = body.querySelector('.copt'); if (sel) sel.addEventListener('change', (e) => { cond[c.id][c.options.id] = e.target.value; applyConditions(); setFocus(c.id, { noFly: false }); });
-        body.querySelectorAll('.cp').forEach(inp => inp.addEventListener('input', (e) => { cond[c.id][inp.dataset.p] = parseFloat(e.target.value); applyConditions(); if (focus.cond !== c.id) setFocus(c.id, { noFly: true }); }));
+        body.querySelectorAll('.cp').forEach(inp => inp.addEventListener('input', (e) => {
+          cond[c.id][inp.dataset.p] = parseFloat(e.target.value); applyConditions();
+          if (focus.cond !== c.id) setFocus(c.id, { noFly: true });
+          pulse.until = performance.now() + 900; // короткая подсветка того, что меняется
+        }));
         body.querySelector('.demo').addEventListener('click', () => demo(c.id));
-        body.querySelectorAll('.chips button').forEach(b => b.addEventListener('click', () => select(b.dataset.s)));
+        body.addEventListener('click', (e) => { const b = e.target.closest('.chips button'); if (b) select(b.dataset.s); });
         box.appendChild(head); box.appendChild(body); root.appendChild(box);
       });
     });
@@ -784,6 +845,17 @@
   function renderConditionNotes() {
     CONDITIONS.forEach(c => {
       const box = document.querySelector(`.cond[data-cond="${c.id}"]`); if (!box) return;
+      // список затронутого и пояснения «что меняется» зависят от формы болезни
+      const cv = conditionView(c), ck = c.id + '|' + (c.options ? cond[c.id][c.options.id] : '');
+      if (box.dataset.ck !== ck) {
+        box.dataset.ck = ck;
+        const name = (a) => byId[a].name.replace(/\s*\(.*\)/, '');
+        box.querySelector('.chips').innerHTML = '<span>Затронуто:</span>' + cv.affects.filter(a => byId[a]).map(a => `<button data-s="${a}" title="Показать описание">${name(a)}</button>`).join('');
+        const ch = cv.changes || {};
+        const items = cv.affects.filter(a => byId[a] && ch[a]).map(a => `<li><b>${name(a)}</b> — ${ch[a]}</li>`);
+        if (ch._note) items.push(`<li class="n">${ch._note}</li>`);
+        box.querySelector('.changes').innerHTML = items.length ? `<div class="chg-title">Что меняется</div><ul class="chg">${items.join('')}</ul>` : '';
+      }
       c.params.forEach(p => { const v = cond[c.id][p.id]; const el = box.querySelector(`.val[data-p="${p.id}"]`); if (el) el.textContent = fmt(v, p); const inp = box.querySelector(`.cp[data-p="${p.id}"]`); if (inp && parseFloat(inp.value) !== v) inp.value = v; });
       const note = box.querySelector('.note');
       if (c.typeNotes) note.textContent = c.typeNotes[cond[c.id][c.options.id]] || '';
