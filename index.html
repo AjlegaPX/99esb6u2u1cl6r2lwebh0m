@@ -165,6 +165,16 @@
   .agemarks { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--muted); margin: -2px 2px 6px; }
   #ageInfo { font-size: 13px; }
   .agenote { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  /* настройки */
+  .settings .panel-title.toggle { cursor: pointer; display: flex; justify-content: space-between; }
+  .settings.collapsed #settingsBody { display: none; }
+  .settings h5 { margin: 10px 0 4px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+  .settings .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 8px; font-size: 12.5px; }
+  .settings .grid label { display: flex; gap: 5px; align-items: flex-start; cursor: pointer; }
+  .settings .grid input { margin-top: 3px; }
+  .settings .tools { display: flex; gap: 6px; margin-top: 10px; }
+  #app.no-left { grid-template-columns: 1fr 360px; }
+  #app.no-left #left { display: none; }
   /* памятка */
   .signs { list-style: none; padding: 0; margin: 0; }
   .signs li { display: flex; flex-direction: column; gap: 4px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 6px; background: var(--panel2); font-size: 13px; }
@@ -288,6 +298,19 @@
       </div>
       <div id="pvNote">Норма: чёткое изображение по всему полю.</div>
     </section>
+    <section id="settingsSec" class="settings collapsed">
+      <div class="panel-title toggle" id="settingsToggle">Настройки <span class="tw">▾</span></div>
+      <div id="settingsBody">
+        <p class="agenote">Снимите флажок, чтобы скрыть блок или проблему. Изменения хранятся в этом браузере; для всех устройств правьте файл config.js.</p>
+        <h5>Блоки интерфейса</h5>
+        <div class="grid" id="setFeatures"></div>
+        <h5>Проблемные места</h5>
+        <div class="grid" id="setConds"></div>
+        <h5>Группы структур</h5>
+        <div class="grid" id="setGroups"></div>
+        <div class="tools"><button class="btn" id="setApply">Применить</button><button class="btn" id="setReset">Сбросить к config.js</button></div>
+      </div>
+    </section>
   </aside>
 </div>
 
@@ -319,6 +342,7 @@
 <script src="lib/CSS2DRenderer.js"></script>
 <script src="lib/GLTFLoader.js"></script>
 <script src="assets/eye_detail.glb.js"></script>
+<script src="config.js"></script>
 <script src="data.js"></script>
 <script src="model.js"></script>
 <script src="app.js"></script>

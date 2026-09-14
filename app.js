@@ -15,6 +15,20 @@
   });
   const isGlobe = (def) => ['shell', 'inner'].includes(def.group) || ['retinal_arteries', 'retinal_veins'].includes(def.id);
 
+  // ---------- Конфигурация: что включено (config.js, поверх него переопределения из localStorage) ----------
+  const CFG_DEFAULT = { features: { age: true, childConditions: true, parents: true, treatments: true, callouts: true, normGhost: true, elements: true, changes: true, patientView: true, rays: true, fly: true, labels: true, layersPanel: true }, hideConditions: [], hideStructures: [], hideGroups: [] };
+  const FEATURE_NAMES = { age: 'Возраст пациента', childConditions: 'Детские проблемы', parents: 'Памятка для родителей', treatments: 'После лечения (операции)', callouts: 'Выносные подписи', normGhost: 'Контур нормы', elements: 'Элементы патологии', changes: 'Блок «Что меняется»', patientView: '«Как видит пациент»', rays: 'Ход лучей', fly: 'Автоподлёт камеры', labels: 'Подписи структур', layersPanel: 'Панель слоёв' };
+  function loadConfig() {
+    const c = JSON.parse(JSON.stringify(CFG_DEFAULT));
+    const merge = (src) => { if (!src) return; if (src.features) Object.assign(c.features, src.features); ['hideConditions', 'hideStructures', 'hideGroups'].forEach(k => { if (Array.isArray(src[k])) c[k] = src[k].slice(); }); };
+    merge(window.EYE_CONFIG);
+    try { merge(JSON.parse(localStorage.getItem('eye3d.config') || 'null')); } catch (e) { /* хранилище недоступно */ }
+    return c;
+  }
+  const cfg = loadConfig(), FT = cfg.features;
+  const condEnabled = (c) => !cfg.hideConditions.includes(c.id) && (FT.childConditions || c.group !== 'child');
+  const structHidden = (id) => cfg.hideStructures.includes(id) || cfg.hideGroups.includes((byId[id] || {}).group);
+
   // ---------- Тема ----------
   const isDark = () => {
     const t = document.documentElement.getAttribute('data-theme');
@@ -167,7 +181,7 @@
     const obj = new THREE.CSS2DObject(div); obj.position.copy(EyeModel.LABELS[id]);
     (isGlobe(byId[id]) ? globeLocal : eyeGroup).add(obj); labels[id] = obj;
   });
-  const ui = { labels: true, rays: false, fly: true };
+  const ui = { labels: FT.labels, rays: false, fly: FT.fly };
   const labelGroups = { shell: true, inner: true, vessels: false, nerves: true, muscles: false, adnexa: false, orbit: false };
   const tmpV = new THREE.Vector3();
   function updateLabels() {
@@ -176,7 +190,7 @@
     Object.keys(labels).forEach(id => {
       const o = labels[id], vis = S[id].visible;
       let ok = ui.labels && vis && (labelGroups[S[id].def.group] || id === selectedId);
-      if (F && id !== selectedId) ok = false; // в режиме проблемы вместо подписей работают выносные плашки
+      if (F && id !== selectedId && (FT.callouts || !F.has(id))) ok = false; // в режиме проблемы вместо подписей работают выносные плашки
       if (ok) {
         const base = EyeModel.LABELS[id];
         o.position.copy(base);
@@ -290,7 +304,7 @@
   function updateNormGhosts(ap, extra) {
     const np = { elong: 0, cone: 0, cdr: 0.3, bombe: 0, pupil: ap.pupil, limbScale: ap.limb, lensThick: ap.lensThick, ptosis: 0, atrophy: 0, angle: 0, g: 1, astig: 0, astigAxis: 0, ablation: 0 };
     const cur = Object.assign({}, params, extra);
-    const changed = Object.keys(NORM_DEPS).filter(id => S[id] && S[id].visible && NORM_DEPS[id].some(k => Math.abs((cur[k] || 0) - (np[k] || 0)) > 1e-6));
+    const changed = FT.normGhost ? Object.keys(NORM_DEPS).filter(id => S[id] && S[id].visible && NORM_DEPS[id].some(k => Math.abs((cur[k] || 0) - (np[k] || 0)) > 1e-6)) : [];
     const key = changed.join(',') + '|' + JSON.stringify(np);
     if (key !== normKey) {
       normKey = key;
@@ -755,7 +769,7 @@
     renderConditionNotes();
     renderAgeInfo();
     updateMarker();
-    $('#parents').hidden = !(isChild() || CONDITIONS.some(x => x.group === 'child' && cond[x.id].on));
+    $('#parents').hidden = !FT.parents || !(isChild() || CONDITIONS.some(x => x.group === 'child' && cond[x.id].on));
   }
 
   // ---------- Вид пациента ----------
@@ -861,13 +875,13 @@
   let selectedId = null;
   function buildLayers() {
     const root = $('#layers'); root.innerHTML = '';
-    GROUPS.forEach(g => {
+    GROUPS.filter(g => !cfg.hideGroups.includes(g.id)).forEach(g => {
       const box = document.createElement('div'); box.className = 'group'; box.dataset.group = g.id;
       const head = document.createElement('div'); head.className = 'group-head';
       head.innerHTML = `<input type="checkbox" class="gchk" title="Показать/скрыть группу"><span class="name" title="${g.hint}">${g.name}</span><button class="lbl ${labelGroups[g.id] ? 'on' : ''}" title="Подписи этой группы">Аа</button><input type="range" class="gop" min="0.05" max="1" step="0.05" value="1" title="Прозрачность группы"><span class="tw">▾</span>`;
       head.querySelector('.lbl').addEventListener('click', (e) => { labelGroups[g.id] = !labelGroups[g.id]; e.target.classList.toggle('on', labelGroups[g.id]); updateLabels(); });
       const body = document.createElement('div'); body.className = 'group-body';
-      STRUCTURES.filter(s => s.group === g.id).forEach(s => {
+      STRUCTURES.filter(s => s.group === g.id && !structHidden(s.id)).forEach(s => {
         const row = document.createElement('div'); row.className = 'row'; row.dataset.id = s.id;
         const sub = s.sub === 'artery' ? '<small> · артерия</small>' : s.sub === 'vein' ? '<small> · вена</small>' : '';
         row.innerHTML = `<input type="checkbox" class="schk" checked><span class="dot" style="background:#${s.color.toString(16).padStart(6, '0')}"></span><span class="nm">${s.name}${sub}</span><button class="iso" title="Показать только это">◎</button>`;
@@ -884,10 +898,10 @@
     });
     syncLayerUI();
   }
-  function setVisible(id, v) { const e = S[id]; if (!e) return; e.visible = v; refreshVisibility(e); syncLayerUI(); }
+  function setVisible(id, v) { const e = S[id]; if (!e) return; e.visible = v && !structHidden(id); refreshVisibility(e); syncLayerUI(); }
   function syncLayerUI() {
     GROUPS.forEach(g => {
-      const ids = STRUCTURES.filter(s => s.group === g.id).map(s => s.id);
+      const ids = STRUCTURES.filter(s => s.group === g.id && !structHidden(s.id)).map(s => s.id);
       const n = ids.filter(id => S[id].visible).length;
       const chk = document.querySelector(`.group[data-group="${g.id}"] .gchk`);
       if (chk) { chk.checked = n === ids.length; chk.indeterminate = n > 0 && n < ids.length; }
@@ -975,7 +989,9 @@
   function buildConditions() {
     const root = $('#condList'); root.innerHTML = '';
     [['adult', 'Взрослый глаз'], ['child', 'Детский глаз']].forEach(([grp, title]) => {
-      const list = CONDITIONS.filter(c => (c.groups || [c.group]).includes(grp));
+      if (grp === 'child' && !FT.childConditions) return;
+      const list = CONDITIONS.filter(c => condEnabled(c) && (c.groups || [c.group]).includes(grp));
+      if (!list.length) return;
       const wrap = document.createElement('div'); wrap.className = 'cond-group'; wrap.dataset.grp = grp;
       const h = document.createElement('div'); h.className = 'sub-title';
       h.innerHTML = `<span>${title} <span class="cnt">(${list.length})</span></span><span class="tw">▾</span>`;
@@ -990,12 +1006,13 @@
         let html = '';
         if (c.options) html += `<label>${c.options.label}</label><select class="copt">${c.options.values.map(v => `<option value="${v.id}">${v.label}</option>`).join('')}</select>`;
         c.params.forEach(p => { html += `<label>${p.label}<span class="val" data-p="${p.id}"></span></label><input type="range" class="cp" data-p="${p.id}" min="${p.min}" max="${p.max}" step="${p.step}" value="${p.def}">`; });
-        if ((TREATMENTS[c.id] || []).length) html += `<label>После лечения</label><select class="ctreat"></select>`;
-        html += `<div class="tools"><button class="btn demo" title="Плавно показать переход от нормы к выбранной степени">Показать изменение</button>${(TREATMENTS[c.id] || []).length ? '<button class="btn ba" title="Переключить между состоянием до и после лечения">До / после</button>' : ''}</div><p class="treat"></p>`;
+        const hasTreat = FT.treatments && (TREATMENTS[c.id] || []).length;
+        if (hasTreat) html += `<label>После лечения</label><select class="ctreat"></select>`;
+        html += `<div class="tools"><button class="btn demo" title="Плавно показать переход от нормы к выбранной степени">Показать изменение</button>${hasTreat ? '<button class="btn ba" title="Переключить между состоянием до и после лечения">До / после</button>' : ''}</div><p class="treat"></p>`;
         html += `<div class="chips"></div>`;
-        const els = (CONDITION_ELEMENTS[c.id] || []).filter(e => PATHO_INFO[e]);
+        const els = FT.elements ? (CONDITION_ELEMENTS[c.id] || []).filter(e => PATHO_INFO[e]) : [];
         if (els.length) html += `<div class="elems"><span>Элементы патологии:</span>${els.map(e => `<button data-e="${e}" title="Описание">${PATHO_INFO[e].name}</button>`).join('')}</div>`;
-        html += `<div class="changes"></div><p class="note"></p><p>${c.desc}</p><p class="sym"><b>Жалобы:</b> ${c.symptoms}</p>`;
+        html += `${FT.changes ? '<div class="changes"></div>' : ''}<p class="note"></p><p>${c.desc}</p><p class="sym"><b>Жалобы:</b> ${c.symptoms}</p>`;
         if (c.signs) html += `<p class="sym parents"><b>Родителям:</b> ${c.signs}</p>`;
         body.innerHTML = html;
         head.querySelector('.con').addEventListener('change', (e) => {
@@ -1066,10 +1083,12 @@
         box.dataset.ck = ck;
         const name = (a) => byId[a].name.replace(/\s*\(.*\)/, '');
         box.querySelector('.chips').innerHTML = '<span>Затронуто:</span>' + cv.affects.filter(a => byId[a]).map(a => `<button data-s="${a}" title="Показать описание">${name(a)}</button>`).join('');
-        const ch = cv.changes || {};
-        const items = cv.affects.filter(a => byId[a] && ch[a]).map(a => `<li><b>${name(a)}</b> — ${ch[a]}</li>`);
-        if (ch._note) items.push(`<li class="n">${ch._note}</li>`);
-        box.querySelector('.changes').innerHTML = items.length ? `<div class="chg-title">Что меняется</div><ul class="chg">${items.join('')}</ul>` : '';
+        const ch = cv.changes || {}, chEl = box.querySelector('.changes');
+        if (chEl) {
+          const items = cv.affects.filter(a => byId[a] && ch[a]).map(a => `<li><b>${name(a)}</b> — ${ch[a]}</li>`);
+          if (ch._note) items.push(`<li class="n">${ch._note}</li>`);
+          chEl.innerHTML = items.length ? `<div class="chg-title">Что меняется</div><ul class="chg">${items.join('')}</ul>` : '';
+        }
       }
       c.params.forEach(p => { const v = cond[c.id][p.id]; const el = box.querySelector(`.val[data-p="${p.id}"]`); if (el) el.textContent = fmt(v, p); const inp = box.querySelector(`.cp[data-p="${p.id}"]`); if (inp && parseFloat(inp.value) !== v) inp.value = v; });
       // варианты лечения для текущей формы болезни и описание выбранного
@@ -1120,6 +1139,32 @@
       if (k < 1) demoTimer = requestAnimationFrame(step); else demoTimer = null;
     };
     cond[id][p.id] = start; applyConditions(); demoTimer = requestAnimationFrame(step);
+  }
+
+  // ---------- Настройки: что показывать (хранится в браузере, применяется после перезагрузки) ----------
+  function buildSettings() {
+    $('#settingsToggle').addEventListener('click', () => $('#settingsSec').classList.toggle('collapsed'));
+    const chk = (id, label, on, cls) => `<label><input type="checkbox" class="${cls}" data-id="${id}" ${on ? 'checked' : ''}> ${label}</label>`;
+    $('#setFeatures').innerHTML = Object.keys(FEATURE_NAMES).map(k => chk(k, FEATURE_NAMES[k], FT[k], 'sf')).join('');
+    $('#setConds').innerHTML = CONDITIONS.map(c => chk(c.id, c.name.replace(/\s*\(.*\)/, ''), !cfg.hideConditions.includes(c.id), 'sc')).join('');
+    $('#setGroups').innerHTML = GROUPS.map(g => chk(g.id, g.name, !cfg.hideGroups.includes(g.id), 'sg')).join('');
+    $('#setApply').addEventListener('click', () => {
+      const out = { features: {}, hideConditions: [], hideGroups: [], hideStructures: cfg.hideStructures };
+      document.querySelectorAll('#setFeatures .sf').forEach(i => out.features[i.dataset.id] = i.checked);
+      document.querySelectorAll('#setConds .sc').forEach(i => { if (!i.checked) out.hideConditions.push(i.dataset.id); });
+      document.querySelectorAll('#setGroups .sg').forEach(i => { if (!i.checked) out.hideGroups.push(i.dataset.id); });
+      try { localStorage.setItem('eye3d.config', JSON.stringify(out)); } catch (e) { alert('Браузер не даёт сохранить настройки'); return; }
+      location.reload();
+    });
+    $('#setReset').addEventListener('click', () => { try { localStorage.removeItem('eye3d.config'); } catch (e) {} location.reload(); });
+  }
+  function applyConfigToLayout() {
+    $('#ageSec').hidden = !FT.age;
+    $('#patient').hidden = !FT.patientView;
+    $('#raysOn').closest('label').hidden = !FT.rays;
+    $('#labelsOn').checked = FT.labels; $('#flyOn').checked = FT.fly;
+    if (!FT.layersPanel) { $('#app').classList.add('no-left'); $('#toggleLeft').hidden = true; }
+    STRUCTURES.filter(s => structHidden(s.id)).forEach(s => setVisible(s.id, false));
   }
 
   // ---------- Памятка для родителей ----------
@@ -1181,7 +1226,7 @@
   const calloutEls = {};
   const svgEl = (tag) => document.createElementNS('http://www.w3.org/2000/svg', tag);
   function updateCallouts() {
-    const F = focusSet();
+    const F = FT.callouts ? focusSet() : null;
     const c = F ? condById[focus.cond] : null, v = c ? conditionView(c) : null, ch = (v && v.changes) || {};
     const w = view.clientWidth, h = view.clientHeight, bw = isMobile() ? 150 : 210, margin = 10, top = 14, gap = 6;
     const project = (p) => { const s = p.clone().project(camera); return { ax: (s.x + 1) / 2 * w, ay: (1 - s.y) / 2 * h, behind: s.z > 1 }; };
@@ -1189,7 +1234,7 @@
     const items = [];
     if (F) {
       v.affects.filter(id => byId[id] && S[id].visible && labels[id]).forEach(id => { labels[id].getWorldPosition(tmpV); items.push(Object.assign({ id, key: id, kind: 's', name: byId[id].name.replace(/\s*\(.*\)/, ''), text: ch[id] || '' }, project(tmpV))); });
-      (CONDITION_ELEMENTS[focus.cond] || []).forEach(id => { const a = PATHO_INFO[id] && pathoAnchor(id); if (a) items.push(Object.assign({ id, key: 'el:' + id, kind: 'p', name: PATHO_INFO[id].name, text: PATHO_INFO[id].desc.split('. ')[0] + '.' }, project(a))); });
+      if (FT.elements) (CONDITION_ELEMENTS[focus.cond] || []).forEach(id => { const a = PATHO_INFO[id] && pathoAnchor(id); if (a) items.push(Object.assign({ id, key: 'el:' + id, kind: 'p', name: PATHO_INFO[id].name, text: PATHO_INFO[id].desc.split('. ')[0] + '.' }, project(a))); });
       const tr = activeTreatment(focus.cond);
       if (tr) (tr.elements || []).forEach(el => { const a = SURG_INFO[el] && surgAnchor(el); if (a) items.push(Object.assign({ id: el, key: 'sg:' + el, kind: 'g', name: SURG_INFO[el].name, text: SURG_INFO[el].desc.split('. ')[0] + '.' }, project(a))); });
     }
@@ -1284,7 +1329,9 @@
   buildLayers();
   buildConditions();
   buildParents();
+  buildSettings();
   STRUCTURES.filter(s => ['adnexa', 'muscles', 'orbit'].includes(s.group) || ['cloquet', 'posterior_chamber'].includes(s.id)).forEach(s => setVisible(s.id, false));
+  applyConfigToLayout();
   applyOpacity();
   updateClipPlane();
   applyConditions();
@@ -1306,7 +1353,11 @@
       applyConditions();
       if (values.on) setFocus(id, { demo: !!values.demo }); else if (values.on === false && focus.cond === id) setFocus(nextEnabledCond(id));
     },
-    setFocus, flyToCondition, demo, showPathoCard, showSurgCard, setTreatment: selectTreatment, setAge: (years) => setAgeByYears(years), setAgeIndex: (i) => { age.idx = i; $('#age').value = i; applyConditions(); syncCondGroups(); },
+    setFocus, flyToCondition, demo, showPathoCard, showSurgCard, setTreatment: selectTreatment,
+    getConfig: () => JSON.parse(JSON.stringify(cfg)),
+    setConfig: (o) => { try { localStorage.setItem('eye3d.config', JSON.stringify(o)); } catch (e) {} location.reload(); },
+    resetConfig: () => { try { localStorage.removeItem('eye3d.config'); } catch (e) {} location.reload(); },
+    setAge: (years) => setAgeByYears(years), setAgeIndex: (i) => { age.idx = i; $('#age').value = i; applyConditions(); syncCondGroups(); },
     setFly: (on) => { ui.fly = !!on; $('#flyOn').checked = ui.fly; },
     getState: () => ({ clip: Object.assign({}, clip), age: stop(), conditions: JSON.parse(JSON.stringify(cond)), visible: Object.fromEntries(STRUCTURES.map(s => [s.id, S[s.id].visible])) }),
     camera, controls, scene,
