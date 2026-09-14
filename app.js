@@ -249,7 +249,7 @@
   function discPoints(n, cu, cv, r, seed) { const R = EyeModel.rng(seed), out = []; for (let i = 0; i < n; i++) { const a = R() * Math.PI * 2, d = r * Math.sqrt(R()); out.push([cu + d * Math.cos(a), cv + d * Math.sin(a), R()]); } return out; }
   const PTS = {
     drusen: discPoints(80, 0, 0, 2.3, 11), microan: EyeModel.treeSamplePoints(60, 21), dotHem: discPoints(24, 1.0, 0, 6.5, 31),
-    exudate: discPoints(50, -0.6, 0.3, 2.4, 41).filter(p => Math.hypot(p[0] + 0.6, p[1] - 0.3) > 0.9), flame: discPoints(110, 1.2, 0, 8.2, 51),
+    exudate: discPoints(90, -0.6, 0.3, 2.4, 41).filter(p => Math.hypot(p[0] + 0.6, p[1] - 0.3) > 0.9).slice(0, 50), flame: discPoints(110, 1.2, 0, 8.2, 51),
   };
   function tangleGeometry(cu, cv, radiusMm, R, seed, n, tubeR) {
     const rnd = EyeModel.rng(seed), geos = [];
@@ -377,7 +377,7 @@
 
     // --- ВМД ---
     const amd = c.amd.on ? c.amd.severity / 100 : 0, wet = c.amd.type === 'wet';
-    const nDr = Math.round(amd * (wet ? 30 : 80));
+    const nDr = Math.min(Math.round(amd * (wet ? 30 : 80)), PTS.drusen.length, patho.drusen.instanceMatrix.count);
     for (let i = 0; i < nDr; i++) { const p = PTS.drusen[i]; placeSphere(patho.drusen, i, fundus(p[0], p[1], E.R_ret - 0.03 + params.elong * 0), 0.6 + p[2] * 0.9); }
     commit(patho.drusen, nDr);
     if (wet && amd > 0) {
@@ -388,7 +388,9 @@
 
     // --- диабетическая ретинопатия ---
     const dr = c.diabetic.on ? c.diabetic.severity / 100 : 0;
-    const nMa = Math.round(dr * 60), nDh = Math.round(Math.max(0, dr - 0.2) * 30), nEx = Math.round(Math.max(0, dr - 0.3) * 70);
+    // число экземпляров не может превышать ни заготовленные точки, ни ёмкость InstancedMesh
+    const cap = (inst, pts, n) => Math.min(n, pts.length, inst.instanceMatrix.count);
+    const nMa = cap(patho.microan, PTS.microan, Math.round(dr * 60)), nDh = cap(patho.dotHem, PTS.dotHem, Math.round(Math.max(0, dr - 0.2) * 30)), nEx = cap(patho.exudate, PTS.exudate, Math.round(Math.max(0, dr - 0.3) * 70));
     for (let i = 0; i < nMa; i++) placeSphere(patho.microan, i, PTS.microan[i], 1);
     commit(patho.microan, nMa);
     for (let i = 0; i < nDh; i++) { const p = PTS.dotHem[i]; placeOnFundus(patho.dotHem, i, p[0], p[1], E.R_ret - 0.05, 0.6 + p[2] * 0.8, 0.5 + p[2] * 0.6, p[2] * 3); }
@@ -403,7 +405,7 @@
     if (vk !== lastVeinKey) { lastVeinKey = vk; setGeometry('retinal_veins', EyeModel.retinalTree(true, { dilate: 1.4 * crvo, tortuosity: crvo })); }
     S.crv.mesh.material.color.copy(crvBase).lerp(crvDark, crvo);
     S.retinal_veins.mesh.material.color.setHex(byId.retinal_veins.color).lerp(crvDark, crvo * 0.8);
-    const nFl = Math.round(crvo * 80);
+    const nFl = Math.min(Math.round(crvo * 80), PTS.flame.length, patho.flameHem.instanceMatrix.count);
     for (let i = 0; i < nFl; i++) { const p = PTS.flame[i]; const ang = Math.atan2(p[1], p[0] - 2.7); placeOnFundus(patho.flameHem, i, p[0], p[1], E.R_ret - 0.05, 0.35 + p[2] * 0.5, 1.2 + p[2] * 1.4, ang); }
     commit(patho.flameHem, nFl);
 
