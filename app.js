@@ -263,6 +263,41 @@
   const tearGeo = new THREE.SphereGeometry(1, 16, 12); tearGeo.scale(2.6, 0.9, 1.1);
   addPatho('tearLake', tearGeo, pmat(0xa9d1f0, 0.55), 0, eyeGroup).position.set(9.0, 9.9, 1.9);
 
+  const pathoMeshes = Object.values(patho);
+  // Точка привязки для плашки элемента патологии
+  function pathoAnchor(id) {
+    const m = patho[id]; if (!m || !m.visible) return null;
+    if (m.isInstancedMesh) { if (!m.count) return null; const mat = new THREE.Matrix4(); m.getMatrixAt(0, mat); return m.localToWorld(new THREE.Vector3().setFromMatrixPosition(mat)); }
+    if (!m.geometry.boundingSphere) m.geometry.computeBoundingSphere();
+    if (!m.geometry.boundingSphere || !isFinite(m.geometry.boundingSphere.radius)) return null;
+    return m.localToWorld(m.geometry.boundingSphere.center.clone());
+  }
+
+  // ---------- Контур нормы: голубая копия структуры в нормальной форме рядом с изменённой ----------
+  const normGroup = new THREE.Group(); eyeGroup.add(normGroup);
+  const normMat = new THREE.MeshStandardMaterial({ color: 0x1fb6ff, emissive: 0x0b4d6e, transparent: true, opacity: 0.34, depthWrite: false, side: THREE.DoubleSide, clippingPlanes: [clipPlane], roughness: 0.4 });
+  const normGhosts = {};
+  const NORM_DEPS = { sclera: ['elong', 'limbScale', 'angle', 'g'], cornea: ['cone', 'limbScale', 'angle', 'g'], choroid: ['elong', 'g'], retina: ['elong', 'g'], vitreous: ['elong'], macula: ['elong'], iris: ['bombe', 'angle'], anterior_chamber: ['bombe'], disc: ['cdr', 'elong'], optic_nerve: ['atrophy', 'elong'], lid_upper: ['ptosis'] };
+  const NORM_BUILD = { sclera: p => EyeModel.geo.sclera(p), cornea: p => EyeModel.geo.cornea(p), choroid: p => EyeModel.geo.choroid(p), retina: p => EyeModel.geo.retina(p), vitreous: p => EyeModel.geo.vitreous(p), macula: p => EyeModel.geo.macula(p), iris: p => EyeModel.geo.iris(p), anterior_chamber: p => EyeModel.geo.anterior_chamber(p), disc: p => EyeModel.geo.disc(p), optic_nerve: p => EyeModel.geo.optic_nerve(p), lid_upper: () => EyeModel.lidGeometry(true, 0) };
+  let normKey = '';
+  function updateNormGhosts(ap, extra) {
+    const np = { elong: 0, cone: 0, cdr: 0.3, bombe: 0, pupil: ap.pupil, limbScale: ap.limb, lensThick: ap.lensThick, ptosis: 0, atrophy: 0, angle: 0, g: 1 };
+    const cur = Object.assign({}, params, extra);
+    const changed = Object.keys(NORM_DEPS).filter(id => S[id] && S[id].visible && NORM_DEPS[id].some(k => Math.abs((cur[k] || 0) - (np[k] || 0)) > 1e-6));
+    const key = changed.join(',') + '|' + JSON.stringify(np);
+    if (key !== normKey) {
+      normKey = key;
+      Object.keys(normGhosts).forEach(id => { if (!changed.includes(id)) { normGroup.remove(normGhosts[id]); normGhosts[id].geometry.dispose(); delete normGhosts[id]; } });
+      changed.forEach(id => {
+        const g = NORM_BUILD[id](np);
+        if (normGhosts[id]) { normGhosts[id].geometry.dispose(); normGhosts[id].geometry = g; }
+        else { const m = new THREE.Mesh(g, normMat); m.renderOrder = 1300; m.userData.normGhost = id; normGroup.add(m); normGhosts[id] = m; }
+        if (id === 'disc') { normGhosts[id].position.copy(E.disc_dir).multiplyScalar(E.R_ret + 0.02); normGhosts[id].quaternion.copy(S.disc.mesh.quaternion); }
+      });
+    }
+    $('#normLegend').hidden = !changed.length && !(focusSet() && (CONDITION_ELEMENTS[focus.cond] || []).length);
+  }
+
   const fundus = EyeModel.fundus;
   const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3();
   function placeOnFundus(inst, i, u, v, R, sx, sy, rot) {
@@ -321,6 +356,7 @@
       conditionView(c).affects.forEach(a => setVisible(a, true));
       (c.show || []).forEach(a => setVisible(a, true)); // структуры для контекста, без подсветки
       if (c.group === 'child' && !isChild() && !opts.keepAge) setAgeByYears(c.typicalAge || 3);
+      const wrap = document.querySelector(`.cond-group[data-grp="${c.group}"]`); if (wrap) wrap.classList.remove('collapsed');
       if (ui.fly && !opts.noFly) flyToCondition(id);
       pulse.until = performance.now() + 2600;
       // после подлёта проигрываем переход от нормы к выбранной степени, чтобы изменение было видно в движении
@@ -375,7 +411,7 @@
   }
   function setAgeByYears(y) {
     let best = 0; AGE_STOPS.forEach((s, i) => { if (Math.abs(s.years - y) < Math.abs(AGE_STOPS[best].years - y)) best = i; });
-    age.idx = best; $('#age').value = best; applyConditions();
+    age.idx = best; $('#age').value = best; applyConditions(); syncCondGroups();
   }
   function renderAgeInfo() {
     const st = stop(), a = ageParams();
@@ -411,7 +447,7 @@
     // масштаб: возраст — весь глаз с орбитой, буфтальм — только яблоко
     eyeGroup.scale.setScalar(ap.s); detailGroup.scale.setScalar(ap.s);
     const g = 1 + 0.22 * cg; globeLocal.scale.setScalar(g); globeWorld.scale.setScalar(g);
-    ghostGroup.visible = isChild() || params.elong !== 0; // контур нормального глаза для сравнения
+    ghostGroup.visible = isChild(); // контур взрослого глаза для сравнения с детским
     // косоглазие: поворот яблока вокруг вертикальной оси; медиальная и латеральная мышцы напрягаются/растягиваются
     const angle = c.strabismus.on ? c.strabismus.angle * DEG : 0;
     globeLocal.rotation.z = -angle; globeWorld.rotation.y = angle;
@@ -610,6 +646,7 @@
     patho.nldSac.visible = nld > 0; patho.nldSac.scale.setScalar(1.05 + 0.7 * nld);
     patho.nldPlug.visible = nld > 0; patho.tearLake.visible = nld > 0; patho.tearLake.scale.setScalar(0.5 + nld);
 
+    updateNormGhosts(ap, { angle: c.strabismus.on ? c.strabismus.angle : 0, g });
     applyOpacity();
     renderPatientView();
     renderConditionNotes();
@@ -756,7 +793,7 @@
       let op = Math.min(1, e.baseOpacity) * groupOpacity[s.group];
       let emissive = 0;
       if (F) {
-        if (F.has(s.id)) { op = Math.min(1, Math.max(op, e.baseOpacity < 1 ? e.baseOpacity + 0.3 : 1)); emissive = 0x1c1c1c; }
+        if (F.has(s.id)) { op = Math.min(1, Math.max(op, e.baseOpacity < 1 ? e.baseOpacity + 0.3 : 1)); emissive = 0x2e1c08; }
         else op = Math.min(op, GHOST);
       }
       if (s.id === selectedId) emissive = 0x3a3a3a;
@@ -798,18 +835,38 @@
     const r = renderer.domElement.getBoundingClientRect();
     const m = new THREE.Vector2(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
     raycaster.setFromCamera(m, camera);
-    const hits = raycaster.intersectObjects(structureMeshes.filter(o => o.visible), false).filter(h => !clip.on || clipPlane.distanceToPoint(h.point) >= 0);
-    if (!hits.length) return;
+    const visibleCut = (h) => !clip.on || clipPlane.distanceToPoint(h.point) >= 0;
+    const hits = raycaster.intersectObjects(structureMeshes.filter(o => o.visible), false).filter(visibleCut);
+    const phits = raycaster.intersectObjects(pathoMeshes.filter(o => o.visible), false).filter(visibleCut);
     const opaque = hits.find(h => h.object.material.opacity >= 0.5);
+    const firstOpaqueDist = opaque ? opaque.distance : Infinity;
+    if (phits.length && phits[0].distance <= firstOpaqueDist + 0.05) { showPathoCard(phits[0].object.userData.patho); return; }
+    if (!hits.length) return;
     select((opaque || hits[0]).object.userData.id);
   });
+  // Карточка элемента патологии (друзы, лоскут, слёзный мешок и т. п.)
+  function showPathoCard(id) {
+    const info = PATHO_INFO[id]; if (!info) return;
+    const owner = Object.keys(CONDITION_ELEMENTS).find(k => CONDITION_ELEMENTS[k].includes(id) && cond[k].on) || Object.keys(CONDITION_ELEMENTS).find(k => CONDITION_ELEMENTS[k].includes(id));
+    const oc = owner && condById[owner];
+    $('#info').innerHTML = `<h2>${info.name}</h2><div class="latin">элемент патологии${oc ? ' · ' + oc.name.replace(/\s*\(.*\)/, '') : ''}</div><p>${info.desc}</p>` +
+      (oc ? `<div class="links"><button data-cond="${owner}">${(oc.short || oc.name).replace(/\s*\(.*\)/, '')}</button></div>` : '');
+    $('#info').querySelectorAll('[data-cond]').forEach(b => b.addEventListener('click', () => enableCondition(b.dataset.cond)));
+    if (isMobile()) { $('#right').classList.add('open'); $('#left').classList.remove('open'); syncMobileBar(); }
+  }
 
   // ---------- Панель состояний ----------
   function buildConditions() {
     const root = $('#condList'); root.innerHTML = '';
     [['adult', 'Взрослый глаз'], ['child', 'Детский глаз']].forEach(([grp, title]) => {
-      const h = document.createElement('div'); h.className = 'sub-title'; h.textContent = title; root.appendChild(h);
-      CONDITIONS.filter(c => c.group === grp).forEach(c => {
+      const list = CONDITIONS.filter(c => c.group === grp);
+      const wrap = document.createElement('div'); wrap.className = 'cond-group'; wrap.dataset.grp = grp;
+      const h = document.createElement('div'); h.className = 'sub-title';
+      h.innerHTML = `<span>${title} <span class="cnt">(${list.length})</span></span><span class="tw">▾</span>`;
+      h.addEventListener('click', () => wrap.classList.toggle('collapsed'));
+      const gbody = document.createElement('div'); gbody.className = 'cond-group-body';
+      wrap.appendChild(h); wrap.appendChild(gbody); root.appendChild(wrap);
+      list.forEach(c => {
         const box = document.createElement('div'); box.className = 'cond'; box.dataset.cond = c.id;
         const head = document.createElement('div'); head.className = 'cond-head';
         head.innerHTML = `<input type="checkbox" class="con"><span class="name">${c.name}</span><button class="fly" title="Подлететь к проблеме">➜</button>`;
@@ -818,7 +875,10 @@
         if (c.options) html += `<label>${c.options.label}</label><select class="copt">${c.options.values.map(v => `<option value="${v.id}">${v.label}</option>`).join('')}</select>`;
         c.params.forEach(p => { html += `<label>${p.label}<span class="val" data-p="${p.id}"></span></label><input type="range" class="cp" data-p="${p.id}" min="${p.min}" max="${p.max}" step="${p.step}" value="${p.def}">`; });
         html += `<div class="tools"><button class="btn demo" title="Плавно показать переход от нормы к выбранной степени">Показать изменение</button></div>`;
-        html += `<div class="chips"></div><div class="changes"></div><p class="note"></p><p>${c.desc}</p><p class="sym"><b>Жалобы:</b> ${c.symptoms}</p>`;
+        html += `<div class="chips"></div>`;
+        const els = (CONDITION_ELEMENTS[c.id] || []).filter(e => PATHO_INFO[e]);
+        if (els.length) html += `<div class="elems"><span>Элементы патологии:</span>${els.map(e => `<button data-e="${e}" title="Описание">${PATHO_INFO[e].name}</button>`).join('')}</div>`;
+        html += `<div class="changes"></div><p class="note"></p><p>${c.desc}</p><p class="sym"><b>Жалобы:</b> ${c.symptoms}</p>`;
         if (c.signs) html += `<p class="sym parents"><b>Родителям:</b> ${c.signs}</p>`;
         body.innerHTML = html;
         head.querySelector('.con').addEventListener('change', (e) => {
@@ -838,11 +898,16 @@
           pulse.until = performance.now() + 900; // короткая подсветка того, что меняется
         }));
         body.querySelector('.demo').addEventListener('click', () => demo(c.id));
-        body.addEventListener('click', (e) => { const b = e.target.closest('.chips button'); if (b) select(b.dataset.s); });
-        box.appendChild(head); box.appendChild(body); root.appendChild(box);
+        body.addEventListener('click', (e) => { const b = e.target.closest('.chips button'); if (b) select(b.dataset.s); const eb = e.target.closest('.elems button'); if (eb) showPathoCard(eb.dataset.e); });
+        box.appendChild(head); box.appendChild(body); gbody.appendChild(box);
       });
     });
     renderConditionNotes();
+    syncCondGroups();
+  }
+  // Группа проблем другого возраста сворачивается; развернуть можно вручную щелчком по заголовку
+  function syncCondGroups() {
+    document.querySelectorAll('.cond-group').forEach(w => w.classList.toggle('collapsed', (w.dataset.grp === 'child') !== isChild()));
   }
   function fmt(v, p) { return (p.step < 1 ? v.toFixed(2).replace(/0+$/, '').replace(/\.$/, '') : Math.round(v)) + p.unit; }
   function renderConditionNotes() {
@@ -921,7 +986,7 @@
   $('#labelsOn').addEventListener('change', (e) => { ui.labels = e.target.checked; updateLabels(); });
   $('#raysOn').addEventListener('change', (e) => { ui.rays = e.target.checked; raysGroup.visible = ui.rays; });
   $('#flyOn').addEventListener('change', (e) => { ui.fly = e.target.checked; });
-  $('#age').addEventListener('input', (e) => { age.idx = parseInt(e.target.value, 10); applyConditions(); });
+  $('#age').addEventListener('input', (e) => { age.idx = parseInt(e.target.value, 10); applyConditions(); syncCondGroups(); });
   const VIEWS = { iso: [[23, 11, 30], [0, -2.5, -1]], front: [[0, 2, 44], [0, 0, 2]], side: [[-46, 4, 3], [0, 0, -5]], top: [[1.5, 46, 1.5], [0, 0, -3]] };
   let currentView = 'iso';
   function setView(name) {
@@ -957,21 +1022,28 @@
   function updateCallouts() {
     const F = focusSet();
     const c = F ? condById[focus.cond] : null, v = c ? conditionView(c) : null, ch = (v && v.changes) || {};
-    const ids = F ? v.affects.filter(id => byId[id] && S[id].visible && labels[id]) : [];
-    Object.keys(calloutEls).forEach(id => { if (!ids.includes(id)) { const e = calloutEls[id]; e.box.remove(); e.path.remove(); e.dot.remove(); e.ring.remove(); delete calloutEls[id]; } });
-    if (!ids.length) return;
     const w = view.clientWidth, h = view.clientHeight, bw = isMobile() ? 150 : 210, margin = 10, top = 14, gap = 6;
-    const items = ids.map(id => { labels[id].getWorldPosition(tmpV); const s = tmpV.clone().project(camera); return { id, ax: (s.x + 1) / 2 * w, ay: (1 - s.y) / 2 * h, behind: s.z > 1 }; });
+    const project = (p) => { const s = p.clone().project(camera); return { ax: (s.x + 1) / 2 * w, ay: (1 - s.y) / 2 * h, behind: s.z > 1 }; };
+    // затронутые структуры + видимые элементы патологии текущей проблемы
+    const items = [];
+    if (F) {
+      v.affects.filter(id => byId[id] && S[id].visible && labels[id]).forEach(id => { labels[id].getWorldPosition(tmpV); items.push(Object.assign({ id, key: id, kind: 's', name: byId[id].name.replace(/\s*\(.*\)/, ''), text: ch[id] || '' }, project(tmpV))); });
+      (CONDITION_ELEMENTS[focus.cond] || []).forEach(id => { const a = PATHO_INFO[id] && pathoAnchor(id); if (a) items.push(Object.assign({ id, key: 'el:' + id, kind: 'p', name: PATHO_INFO[id].name, text: PATHO_INFO[id].desc.split('. ')[0] + '.' }, project(a))); });
+    }
+    const keys = items.map(i => i.key);
+    Object.keys(calloutEls).forEach(k => { if (!keys.includes(k)) { const e = calloutEls[k]; e.box.remove(); e.path.remove(); e.dot.remove(); e.ring.remove(); delete calloutEls[k]; } });
+    if (!items.length) return;
     items.forEach(it => {
-      if (calloutEls[it.id]) return;
-      const box = document.createElement('div'); box.className = 'callout';
-      box.innerHTML = `<b>${byId[it.id].name.replace(/\s*\(.*\)/, '')}</b><span>${ch[it.id] || ''}</span>`;
-      box.addEventListener('click', () => select(it.id));
+      if (calloutEls[it.key]) return;
+      const box = document.createElement('div'); box.className = 'callout' + (it.kind === 'p' ? ' patho' : '');
+      box.innerHTML = `<b>${it.name}</b><span>${it.text}</span>`;
+      box.addEventListener('click', () => it.kind === 'p' ? showPathoCard(it.id) : select(it.id));
       calloutBoxesEl.appendChild(box);
       const path = svgEl('path'), dot = svgEl('circle'), ring = svgEl('circle');
-      dot.setAttribute('class', 'dot'); dot.setAttribute('r', 4); ring.setAttribute('class', 'ring'); ring.setAttribute('r', 6);
+      const cls = it.kind === 'p' ? ' patho' : '';
+      path.setAttribute('class', cls.trim()); dot.setAttribute('class', 'dot' + cls); dot.setAttribute('r', 4); ring.setAttribute('class', 'ring' + cls); ring.setAttribute('r', 6);
       calloutSvg.appendChild(path); calloutSvg.appendChild(ring); calloutSvg.appendChild(dot);
-      calloutEls[it.id] = { box, path, dot, ring };
+      calloutEls[it.key] = { box, path, dot, ring };
     });
     // раскладка по двум колонкам, ближе к своей структуре, без наложений
     let left = items.filter(i => i.ax < w / 2).sort((a, b) => a.ay - b.ay), right = items.filter(i => i.ax >= w / 2).sort((a, b) => a.ay - b.ay);
@@ -980,11 +1052,11 @@
     while (right.length > cap && left.length < cap) left.push(right.pop());
     const place = (col, x) => {
       let y = top;
-      col.forEach(it => { const box = calloutEls[it.id].box; const bh = box.offsetHeight || 44; let by = Math.max(y, it.ay - bh / 2); if (by + bh > h - 8) by = Math.max(top, h - 8 - bh); box.style.left = x + 'px'; box.style.top = by + 'px'; it.bx = x; it.by = by; it.bh = bh; y = by + bh + gap; });
+      col.forEach(it => { const box = calloutEls[it.key].box; const bh = box.offsetHeight || 44; let by = Math.max(y, it.ay - bh / 2); if (by + bh > h - 8) by = Math.max(top, h - 8 - bh); box.style.left = x + 'px'; box.style.top = by + 'px'; it.bx = x; it.by = by; it.bh = bh; y = by + bh + gap; });
     };
     place(left, margin); place(right, w - margin - bw);
     items.forEach(it => {
-      const e = calloutEls[it.id]; e.box.classList.toggle('behind', it.behind);
+      const e = calloutEls[it.key]; e.box.classList.toggle('behind', it.behind);
       const leftSide = it.bx < w / 2, fromX = leftSide ? it.bx + bw : it.bx, fromY = it.by + Math.min(it.bh / 2, 16), midX = leftSide ? fromX + 14 : fromX - 14;
       const ax = Math.max(2, Math.min(w - 2, it.ax)), ay = Math.max(2, Math.min(h - 2, it.ay));
       e.path.setAttribute('d', it.behind ? '' : `M${fromX.toFixed(1)},${fromY.toFixed(1)} L${midX.toFixed(1)},${fromY.toFixed(1)} L${ax.toFixed(1)},${ay.toFixed(1)}`);
@@ -1071,7 +1143,7 @@
       applyConditions();
       if (values.on) setFocus(id, { demo: !!values.demo }); else if (values.on === false && focus.cond === id) setFocus(nextEnabledCond(id));
     },
-    setFocus, flyToCondition, demo, setAge: (years) => setAgeByYears(years), setAgeIndex: (i) => { age.idx = i; $('#age').value = i; applyConditions(); },
+    setFocus, flyToCondition, demo, showPathoCard, setAge: (years) => setAgeByYears(years), setAgeIndex: (i) => { age.idx = i; $('#age').value = i; applyConditions(); syncCondGroups(); },
     setFly: (on) => { ui.fly = !!on; $('#flyOn').checked = ui.fly; },
     getState: () => ({ clip: Object.assign({}, clip), age: stop(), conditions: JSON.parse(JSON.stringify(cond)), visible: Object.fromEntries(STRUCTURES.map(s => [s.id, S[s.id].visible])) }),
     camera, controls, scene,

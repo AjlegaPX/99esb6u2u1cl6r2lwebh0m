@@ -126,6 +126,22 @@
   .callout span { display: block; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
   .callout:hover { border-color: var(--accent); }
   .callout.behind { display: none; }
+  .callout.patho { border-color: #d98a1f; }
+  #callouts path.patho, #callouts circle.patho { stroke: #d98a1f; }
+  #callouts circle.dot.patho { fill: #d98a1f; }
+  #normLegend { position: absolute; left: 10px; top: 10px; z-index: 2; font-size: 11.5px; color: var(--text); background: var(--panel); border: 1px solid var(--line); padding: 4px 8px; border-radius: 6px; opacity: .92; pointer-events: none; display: flex; gap: 6px; align-items: center; }
+  #normLegend .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  #normLegend .sw.norm { background: rgba(31,182,255,.55); border: 1px solid #1fb6ff; }
+  #normLegend .sw.chg { background: #e0862a; }
+  #normLegend .sw.el { background: #d98a1f; opacity: .6; }
+  .cond-group .sub-title { display: flex; justify-content: space-between; cursor: pointer; user-select: none; padding: 4px 2px; border-radius: 5px; }
+  .cond-group .sub-title:hover { background: var(--accent-soft); }
+  .cond-group .sub-title .cnt { font-weight: 400; }
+  .cond-group.collapsed .cond-group-body { display: none; }
+  .elems { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 6px; }
+  .elems span { font-size: 11.5px; color: var(--muted); margin-right: 2px; }
+  .elems button { border: 1px solid #d98a1f; background: var(--panel); color: var(--text); border-radius: 12px; padding: 1px 8px; font-size: 11.5px; cursor: pointer; }
+  .elems button:hover { background: #d98a1f; color: #fff; }
   #callouts path { fill: none; stroke: var(--danger); stroke-width: 1.5; }
   #callouts circle.dot { fill: var(--danger); stroke: #fff; stroke-width: 1.5; }
   #callouts circle.ring { fill: none; stroke: var(--danger); stroke-width: 1.5; animation: ringPulse 1.4s ease-out infinite; }
@@ -225,6 +241,7 @@
     <div id="labels"></div>
     <svg id="callouts"></svg>
     <div id="calloutBoxes"></div>
+    <div id="normLegend" hidden><span class="sw norm"></span> норма <span class="sw chg"></span> изменено <span class="sw el"></span> элементы патологии</div>
     <div id="hint">Вращение — левая кнопка, сдвиг — правая, масштаб — колесо. Клик по структуре — описание.</div>
     <div id="axisHint">Нос → справа · Висок ← слева</div>
   </main>
