@@ -30,6 +30,26 @@
   const show = Object.assign({ context: 0.15, highlight: 0.7, pvAuto: true }, cfg.show, { pvFloat: false });
   try { Object.assign(show, JSON.parse(localStorage.getItem('eye3d.show') || '{}'), { pvFloat: false }); } catch (e) { /* хранилище недоступно */ }
   const saveShow = () => { try { localStorage.setItem('eye3d.show', JSON.stringify({ context: show.context, highlight: show.highlight, pvAuto: show.pvAuto })); } catch (e) { /* нет хранилища */ } };
+  // Подписи на модели под контролем врача: закрытые подписи и плашки, перетащенные подписи (смещение в px) и плашки (доля ширины/высоты сцены),
+  // переключатели плашек, маркера и легенды. Хранится в браузере и попадает в шаги сценария.
+  const ann = { hiddenLabels: new Set(), hiddenCallouts: new Set(), labelOffsets: {}, calloutPins: {}, callouts: true, marker: true, legend: true };
+  function readAnn(a) {
+    if (!a || typeof a !== 'object') return;
+    ann.hiddenLabels = new Set(Array.isArray(a.hiddenLabels) ? a.hiddenLabels : []); ann.hiddenCallouts = new Set(Array.isArray(a.hiddenCallouts) ? a.hiddenCallouts : []);
+    ann.labelOffsets = Object.assign({}, a.labelOffsets || {}); ann.calloutPins = Object.assign({}, a.calloutPins || {});
+    ['callouts', 'marker', 'legend'].forEach(k => { ann[k] = typeof a[k] === 'boolean' ? a[k] : true; });
+  }
+  try { readAnn(JSON.parse(localStorage.getItem('eye3d.annot') || 'null')); } catch (e) { /* хранилище недоступно */ }
+  const annJSON = () => ({ hiddenLabels: [...ann.hiddenLabels], hiddenCallouts: [...ann.hiddenCallouts], labelOffsets: ann.labelOffsets, calloutPins: ann.calloutPins, callouts: ann.callouts, marker: ann.marker, legend: ann.legend });
+  const saveAnn = () => { try { localStorage.setItem('eye3d.annot', JSON.stringify(annJSON())); } catch (e) { /* нет хранилища */ } syncAnnUI(); };
+  // Перетаскивание подписи или плашки указателем; нажатие без движения считается кликом
+  function makeDraggable(el, h) {
+    let st = null;
+    el.addEventListener('pointerdown', (e) => { if (e.button !== 0 || e.target.closest('.x')) return; const o = h.onStart(); st = { x: e.clientX, y: e.clientY, ox: o.dx, oy: o.dy, moved: false }; try { el.setPointerCapture(e.pointerId); } catch (err) { /* без захвата */ } e.stopPropagation(); e.preventDefault(); });
+    el.addEventListener('pointermove', (e) => { if (!st) return; const dx = e.clientX - st.x, dy = e.clientY - st.y; if (!st.moved && Math.hypot(dx, dy) < 4) return; st.moved = true; el.classList.add('dragging'); h.onMove(st.ox + dx, st.oy + dy); });
+    el.addEventListener('pointerup', (e) => { if (!st) return; const moved = st.moved; st = null; el.classList.remove('dragging'); if (moved) h.onEnd(); else if (h.onClick) h.onClick(e); });
+    el.addEventListener('pointercancel', () => { st = null; el.classList.remove('dragging'); });
+  }
   const condEnabled = (c) => !cfg.hideConditions.includes(c.id) && (FT.childConditions || c.group !== 'child');
   const structHidden = (id) => cfg.hideStructures.includes(id) || cfg.hideGroups.includes((byId[id] || {}).group);
 
@@ -180,11 +200,39 @@
   const labels = {};
   Object.keys(EyeModel.LABELS).forEach(id => {
     if (!byId[id]) return;
-    const div = document.createElement('div'); div.className = 'label'; div.textContent = byId[id].name.replace(/\s*\(.*\)/, '');
-    div.addEventListener('click', (e) => { e.stopPropagation(); select(id); });
+    const div = document.createElement('div'); div.className = 'label'; div.innerHTML = '<span class="t"></span><span class="x" title="Скрыть подпись">×</span>';
+    div.querySelector('.t').textContent = byId[id].name.replace(/\s*\(.*\)/, '');
+    div.querySelector('.x').addEventListener('click', (e) => { e.stopPropagation(); ann.hiddenLabels.add(id); saveAnn(); updateLabels(); });
+    makeDraggable(div, { onStart: () => Object.assign({ dx: 0, dy: 0 }, ann.labelOffsets[id]), onMove: (dx, dy) => { ann.labelOffsets[id] = { dx: Math.round(dx), dy: Math.round(dy) }; applyLabelOffset(id); }, onEnd: () => saveAnn(), onClick: () => select(id) });
     const obj = new THREE.CSS2DObject(div); obj.position.copy(EyeModel.LABELS[id]);
     (isGlobe(byId[id]) ? globeLocal : eyeGroup).add(obj); labels[id] = obj;
   });
+  // Перетащенная подпись смещается полями (transform каждый кадр перезаписывает CSS2DRenderer), к якорю идёт пунктирный поводок
+  function applyLabelOffset(id) {
+    const o = ann.labelOffsets[id], el = labels[id].element;
+    el.style.marginLeft = o ? o.dx + 'px' : ''; el.style.marginTop = o ? o.dy + 'px' : ''; el.classList.toggle('moved', !!o);
+  }
+  Object.keys(labels).forEach(applyLabelOffset);
+  const leaderEls = {};
+  function updateLabelLeaders() {
+    const vr = view.getBoundingClientRect();
+    Object.keys(leaderEls).forEach(id => { if (!ann.labelOffsets[id]) { leaderEls[id].remove(); delete leaderEls[id]; } });
+    Object.keys(ann.labelOffsets).forEach(id => {
+      const o = labels[id]; if (!o) return;
+      const el = o.element, shown = o.visible && el.style.display !== 'none' && el.style.visibility !== 'hidden';
+      let p = leaderEls[id]; if (!p) { p = svgEl('path'); p.setAttribute('class', 'leader'); calloutSvg.appendChild(p); leaderEls[id] = p; }
+      if (!shown) { p.setAttribute('d', ''); return; }
+      o.getWorldPosition(tmpV); const s = tmpV.project(camera);
+      const ax = (s.x + 1) / 2 * vr.width, ay = (1 - s.y) / 2 * vr.height, r = el.getBoundingClientRect();
+      p.setAttribute('d', `M${ax.toFixed(1)},${ay.toFixed(1)} L${(r.left - vr.left - 4.5).toFixed(1)},${(r.top - vr.top + r.height / 2).toFixed(1)}`);
+    });
+  }
+  function syncAnnUI() {
+    const n = ann.hiddenLabels.size + ann.hiddenCallouts.size + Object.keys(ann.labelOffsets).length + Object.keys(ann.calloutPins).length;
+    const b = $('#annReset'); if (b) { b.textContent = n ? `Вернуть подписи (${n})` : 'Вернуть подписи'; b.disabled = !n; }
+    ['callouts', 'marker', 'legend'].forEach(k => { const el = $('#ann' + k[0].toUpperCase() + k.slice(1)); if (el) el.checked = ann[k]; });
+  }
+  function setAnn(a) { readAnn(a); Object.keys(labels).forEach(applyLabelOffset); saveAnn(); updateLabels(); updateMarker(); applyConditions(); }
   const ui = { labels: FT.labels, rays: false, fly: FT.fly };
   const labelGroups = { shell: true, inner: true, vessels: false, nerves: true, muscles: false, adnexa: false, orbit: false };
   const tmpV = new THREE.Vector3();
@@ -193,7 +241,7 @@
     const F = focusSet();
     Object.keys(labels).forEach(id => {
       const o = labels[id], vis = S[id].visible;
-      let ok = ui.labels && vis && (labelGroups[S[id].def.group] || id === selectedId);
+      let ok = ui.labels && vis && !ann.hiddenLabels.has(id) && (labelGroups[S[id].def.group] || id === selectedId);
       if (F && id !== selectedId && (FT.callouts || !F.has(id))) ok = false; // в режиме проблемы вместо подписей работают выносные плашки
       if (ok) {
         const base = EyeModel.LABELS[id];
@@ -320,7 +368,7 @@
         if (id === 'disc') { normGhosts[id].position.copy(E.disc_dir).multiplyScalar(E.R_ret + 0.02); normGhosts[id].quaternion.copy(S.disc.mesh.quaternion); }
       });
     }
-    $('#normLegend').hidden = !changed.length && !(focusSet() && (CONDITION_ELEMENTS[focus.cond] || []).length);
+    $('#normLegend').hidden = !ann.legend || (!changed.length && !(focusSet() && (CONDITION_ELEMENTS[focus.cond] || []).length));
   }
 
   const fundus = EyeModel.fundus;
@@ -465,7 +513,7 @@
   function updateMarker() {
     const on = focus.cond && cond[focus.cond].on;
     const v = on ? conditionView(condById[focus.cond]) : null;
-    markerObj.visible = !!(v && v.marker);
+    markerObj.visible = !!(v && v.marker) && ann.marker;
     markerDiv.style.display = markerObj.visible ? '' : 'none';
     if (v && v.marker) {
       markerObj.position.set(...v.marker); if (focus.cond === 'ametropia' || focus.cond === 'child_myopia') markerObj.position.y -= params.elong;
@@ -1238,18 +1286,20 @@
   const calloutEls = {};
   const svgEl = (tag) => document.createElementNS('http://www.w3.org/2000/svg', tag);
   function updateCallouts() {
-    const F = FT.callouts ? focusSet() : null;
+    const F = FT.callouts && ann.callouts ? focusSet() : null;
     const c = F ? condById[focus.cond] : null, v = c ? conditionView(c) : null, ch = (v && v.changes) || {};
+    const pinKey = (it) => focus.cond + '|' + it.key;
     const w = view.clientWidth, h = view.clientHeight, bw = isMobile() ? 150 : 210, margin = 10, top = 14, gap = 6;
     const project = (p) => { const s = p.clone().project(camera); return { ax: (s.x + 1) / 2 * w, ay: (1 - s.y) / 2 * h, behind: s.z > 1 }; };
     // затронутые структуры + видимые элементы патологии текущей проблемы
-    const items = [];
+    let items = [];
     if (F) {
       v.affects.filter(id => byId[id] && S[id].visible && labels[id]).forEach(id => { labels[id].getWorldPosition(tmpV); items.push(Object.assign({ id, key: id, kind: 's', name: byId[id].name.replace(/\s*\(.*\)/, ''), text: ch[id] || '' }, project(tmpV))); });
       if (FT.elements) (CONDITION_ELEMENTS[focus.cond] || []).forEach(id => { const a = PATHO_INFO[id] && pathoAnchor(id); if (a) items.push(Object.assign({ id, key: 'el:' + id, kind: 'p', name: PATHO_INFO[id].name, text: PATHO_INFO[id].desc.split('. ')[0] + '.' }, project(a))); });
       const tr = activeTreatment(focus.cond);
       if (tr) (tr.elements || []).forEach(el => { const a = SURG_INFO[el] && surgAnchor(el); if (a) items.push(Object.assign({ id: el, key: 'sg:' + el, kind: 'g', name: SURG_INFO[el].name, text: SURG_INFO[el].desc.split('. ')[0] + '.' }, project(a))); });
     }
+    items = items.filter(it => !ann.hiddenCallouts.has(pinKey(it)));
     const keys = items.map(i => i.key);
     Object.keys(calloutEls).forEach(k => { if (!keys.includes(k)) { const e = calloutEls[k]; e.box.remove(); e.path.remove(); e.dot.remove(); e.ring.remove(); delete calloutEls[k]; } });
     if (!items.length) return;
@@ -1257,8 +1307,15 @@
       if (calloutEls[it.key]) return;
       const kindCls = it.kind === 'p' ? ' patho' : it.kind === 'g' ? ' surg' : '';
       const box = document.createElement('div'); box.className = 'callout' + kindCls;
-      box.innerHTML = `<b>${it.name}</b><span>${it.text}</span>`;
-      box.addEventListener('click', () => it.kind === 'p' ? showPathoCard(it.id) : it.kind === 'g' ? showSurgCard(it.id) : select(it.id));
+      box.innerHTML = `<b>${it.name}</b><span>${it.text}</span><i class="x" title="Скрыть плашку">×</i>`;
+      const pk = pinKey(it);
+      box.querySelector('.x').addEventListener('click', (e) => { e.stopPropagation(); ann.hiddenCallouts.add(pk); saveAnn(); });
+      makeDraggable(box, {
+        onStart: () => { const el = calloutEls[it.key]; return { dx: el ? el.px : 0, dy: el ? el.py : 0 }; },
+        onMove: (x, y) => { const el = calloutEls[it.key]; if (!el) return; const r = view.getBoundingClientRect(); ann.calloutPins[pk] = { fx: +(x / r.width).toFixed(4), fy: +(y / r.height).toFixed(4) }; el.px = x; el.py = y; },
+        onEnd: () => saveAnn(),
+        onClick: () => it.kind === 'p' ? showPathoCard(it.id) : it.kind === 'g' ? showSurgCard(it.id) : select(it.id),
+      });
       calloutBoxesEl.appendChild(box);
       const path = svgEl('path'), dot = svgEl('circle'), ring = svgEl('circle');
       const cls = kindCls;
@@ -1271,6 +1328,7 @@
     const dead = w * 0.12, swapGap = 28;
     items.forEach(it => {
       const e = calloutEls[it.key], side = e.side;
+      it.pin = ann.calloutPins[pinKey(it)] || null; // перетащенная врачом плашка стоит где поставили и в колонки не входит
       if (!side) e.side = it.ax < w / 2 ? 'L' : 'R'; else if (side === 'L' && it.ax > w / 2 + dead) e.side = 'R'; else if (side === 'R' && it.ax < w / 2 - dead) e.side = 'L';
       if (e.side !== side) e.rank = undefined;
       it.side = e.side;
@@ -1280,7 +1338,7 @@
       for (let pass = 0; pass < col.length; pass++) for (let i = 0; i + 1 < col.length; i++) if (col[i].ay > col[i + 1].ay + swapGap) { const t = col[i]; col[i] = col[i + 1]; col[i + 1] = t; }
       return col;
     };
-    let left = orderCol(items.filter(i => i.side === 'L')), right = orderCol(items.filter(i => i.side === 'R'));
+    let left = orderCol(items.filter(i => !i.pin && i.side === 'L')), right = orderCol(items.filter(i => !i.pin && i.side === 'R'));
     const cap = Math.max(2, Math.floor((h - top) / 54));
     while (left.length > cap && right.length < cap) right.push(left.pop());
     while (right.length > cap && left.length < cap) left.push(right.pop());
@@ -1292,10 +1350,15 @@
         e.rank = i;
         if (e.px === undefined) { e.px = x; e.py = by; }
         else { e.px += (x - e.px) * 0.25; e.py += (by - e.py) * 0.25; if (Math.abs(x - e.px) < 0.5) e.px = x; if (Math.abs(by - e.py) < 0.5) e.py = by; }
-        box.style.left = e.px.toFixed(1) + 'px'; box.style.top = e.py.toFixed(1) + 'px'; it.bx = e.px; it.by = e.py; it.bh = bh; y = by + bh + gap;
+        box.classList.remove('pinned'); box.style.left = e.px.toFixed(1) + 'px'; box.style.top = e.py.toFixed(1) + 'px'; it.bx = e.px; it.by = e.py; it.bh = bh; y = by + bh + gap;
       });
     };
     place(left, margin); place(right, w - margin - bw);
+    items.filter(i => i.pin).forEach(it => {
+      const e = calloutEls[it.key], bh = e.box.offsetHeight || 44;
+      const x = Math.max(0, Math.min(w - bw, it.pin.fx * w)), y = Math.max(0, Math.min(h - bh, it.pin.fy * h));
+      e.px = x; e.py = y; e.box.classList.add('pinned'); e.box.style.left = x.toFixed(1) + 'px'; e.box.style.top = y.toFixed(1) + 'px'; it.bx = x; it.by = y; it.bh = bh;
+    });
     items.forEach(it => {
       const e = calloutEls[it.key]; e.box.classList.toggle('behind', it.behind);
       const leftSide = it.bx < w / 2, fromX = leftSide ? it.bx + bw : it.bx, fromY = it.by + Math.min(it.bh / 2, 16), midX = leftSide ? fromX + 14 : fromX - 14;
@@ -1310,13 +1373,13 @@
   function declutterLabels() {
     if ((declutterTick++ % 5) !== 0) return;
     const items = Object.keys(labels).filter(id => labels[id].visible && labels[id].element.style.display !== 'none')
-      .map(id => ({ id, el: labels[id].element, p: (id === selectedId ? -10 : 0) + GROUP_PRIO[S[id].def.group] })).sort((a, b) => a.p - b.p);
+      .map(id => ({ id, el: labels[id].element, moved: !!ann.labelOffsets[id], p: (ann.labelOffsets[id] ? -20 : 0) + (id === selectedId ? -10 : 0) + GROUP_PRIO[S[id].def.group] })).sort((a, b) => a.p - b.p);
     const kept = [];
     if (markerObj.visible) kept.push(markerDiv.getBoundingClientRect());
     Object.values(calloutEls).forEach(e => { if (!e.box.classList.contains('behind')) kept.push(e.box.getBoundingClientRect()); });
     items.forEach(it => {
       const r = it.el.getBoundingClientRect();
-      const hit = kept.some(k => !(r.right < k.left || r.left > k.right || r.bottom < k.top || r.top > k.bottom));
+      const hit = !it.moved && kept.some(k => !(r.right < k.left || r.left > k.right || r.bottom < k.top || r.top > k.bottom));
       it.el.style.visibility = hit ? 'hidden' : '';
       if (!hit) kept.push(r);
     });
@@ -1354,6 +1417,7 @@
     labelRenderer.render(scene, camera);
     declutterLabels();
     updateCallouts();
+    updateLabelLeaders();
   }
   function loop() { render(); requestAnimationFrame(loop); }
 
@@ -1382,6 +1446,13 @@
     $('#pvUnpin').addEventListener('click', () => setPvFloat(false));
     $('#showbarToggle').addEventListener('click', () => $('#showbar').classList.toggle(isMobile() ? 'open' : 'collapsed')); // на телефоне свёрнута по умолчанию
     if (!FT.patientView) { $('#pvPin').hidden = true; $('#pvAuto').closest('label').hidden = true; }
+    ['callouts', 'marker', 'legend'].forEach(k => {
+      const el = $('#ann' + k[0].toUpperCase() + k.slice(1));
+      el.addEventListener('change', () => { ann[k] = el.checked; saveAnn(); updateMarker(); if (k === 'legend') { if (ann.legend) applyConditions(); else $('#normLegend').hidden = true; } });
+    });
+    $('#annReset').addEventListener('click', () => { ann.hiddenLabels.clear(); ann.hiddenCallouts.clear(); ann.labelOffsets = {}; ann.calloutPins = {}; saveAnn(); Object.keys(labels).forEach(applyLabelOffset); updateLabels(); });
+    if (!FT.callouts) $('#annCallouts').closest('label').hidden = true;
+    syncAnnUI();
     // окно пациента можно перетащить за заголовок
     const head = pvFloatEl.querySelector('.pvf-head'); let drag = null;
     head.addEventListener('pointerdown', (e) => { if (e.target.closest('button')) return; const r = pvFloatEl.getBoundingClientRect(), vr = view.getBoundingClientRect(); drag = { dx: e.clientX - r.left, dy: e.clientY - r.top, vr }; head.setPointerCapture(e.pointerId); });
@@ -1416,6 +1487,7 @@
       age: age.idx, clip: Object.assign({}, clip), cam: { pos: camera.position.toArray().map(r2), target: controls.target.toArray().map(r2) },
       conds, focus: focus.cond && cond[focus.cond].on ? focus.cond : null, selected: selectedId, rays: ui.rays, labels: ui.labels,
       hidden: STRUCTURES.filter(s => !S[s.id].visible && !structHidden(s.id)).map(s => s.id),
+      ann: annJSON(),
     };
   }
   function applyState(st, opts = {}) {
@@ -1437,6 +1509,7 @@
     ui.rays = !!st.rays; $('#raysOn').checked = ui.rays; raysGroup.visible = ui.rays;
     ui.labels = st.labels !== false; $('#labelsOn').checked = ui.labels;
     if (st.clip) { Object.assign(clip, st.clip); updateClipPlane(); }
+    if (st.ann) { readAnn(st.ann); Object.keys(labels).forEach(applyLabelOffset); saveAnn(); }
     applyConditions(); syncCondGroups();
     if (st.selected && S[st.selected]) select(st.selected); else { selectedId = null; syncLayerUI(); }
     setFocus(st.focus && cond[st.focus] && cond[st.focus].on ? st.focus : null, { noFly: true, keepAge: true });
@@ -1582,6 +1655,7 @@
     setFly: (on) => { ui.fly = !!on; $('#flyOn').checked = ui.fly; },
     setShow: (o) => { Object.assign(show, o || {}); saveShow(); applyOpacity(); }, getShow: () => Object.assign({}, show),
     setPatientFloat: (on) => setPvFloat(on),
+    getAnnotations: annJSON, setAnnotations: setAnn, hideLabel: (id) => { ann.hiddenLabels.add(id); saveAnn(); updateLabels(); }, showLabel: (id) => { ann.hiddenLabels.delete(id); saveAnn(); updateLabels(); },
     scenarios: {
       list: () => scenarios.map(s => s.name), get: () => JSON.parse(JSON.stringify(scenarios)),
       set: (list) => { if (Array.isArray(list) && list.length) { scenarios = JSON.parse(JSON.stringify(list)); scCur = 0; scEditIdx = -1; saveScenarios(); renderScenario(); } },
