@@ -1266,14 +1266,34 @@
       calloutSvg.appendChild(path); calloutSvg.appendChild(ring); calloutSvg.appendChild(dot);
       calloutEls[it.key] = { box, path, dot, ring };
     });
-    // раскладка по двум колонкам, ближе к своей структуре, без наложений
-    let left = items.filter(i => i.ax < w / 2).sort((a, b) => a.ay - b.ay), right = items.filter(i => i.ax >= w / 2).sort((a, b) => a.ay - b.ay);
+    // раскладка по двум колонкам с гистерезисом: сторона и порядок меняются только при заметном смещении якоря,
+    // а плашки скользят к новому месту, иначе при вращении они прыгают (якорь стекловидного тела ходит около центра экрана)
+    const dead = w * 0.12, swapGap = 28;
+    items.forEach(it => {
+      const e = calloutEls[it.key], side = e.side;
+      if (!side) e.side = it.ax < w / 2 ? 'L' : 'R'; else if (side === 'L' && it.ax > w / 2 + dead) e.side = 'R'; else if (side === 'R' && it.ax < w / 2 - dead) e.side = 'L';
+      if (e.side !== side) e.rank = undefined;
+      it.side = e.side;
+    });
+    const orderCol = (col) => {
+      col.sort((a, b) => ((calloutEls[a.key].rank ?? 1e9) - (calloutEls[b.key].rank ?? 1e9)) || (a.ay - b.ay));
+      for (let pass = 0; pass < col.length; pass++) for (let i = 0; i + 1 < col.length; i++) if (col[i].ay > col[i + 1].ay + swapGap) { const t = col[i]; col[i] = col[i + 1]; col[i + 1] = t; }
+      return col;
+    };
+    let left = orderCol(items.filter(i => i.side === 'L')), right = orderCol(items.filter(i => i.side === 'R'));
     const cap = Math.max(2, Math.floor((h - top) / 54));
     while (left.length > cap && right.length < cap) right.push(left.pop());
     while (right.length > cap && left.length < cap) left.push(right.pop());
     const place = (col, x) => {
       let y = top;
-      col.forEach(it => { const box = calloutEls[it.key].box; const bh = box.offsetHeight || 44; let by = Math.max(y, it.ay - bh / 2); if (by + bh > h - 8) by = Math.max(top, h - 8 - bh); box.style.left = x + 'px'; box.style.top = by + 'px'; it.bx = x; it.by = by; it.bh = bh; y = by + bh + gap; });
+      col.forEach((it, i) => {
+        const e = calloutEls[it.key], box = e.box, bh = box.offsetHeight || 44;
+        let by = Math.max(y, it.ay - bh / 2); if (by + bh > h - 8) by = Math.max(top, h - 8 - bh);
+        e.rank = i;
+        if (e.px === undefined) { e.px = x; e.py = by; }
+        else { e.px += (x - e.px) * 0.25; e.py += (by - e.py) * 0.25; if (Math.abs(x - e.px) < 0.5) e.px = x; if (Math.abs(by - e.py) < 0.5) e.py = by; }
+        box.style.left = e.px.toFixed(1) + 'px'; box.style.top = e.py.toFixed(1) + 'px'; it.bx = e.px; it.by = e.py; it.bh = bh; y = by + bh + gap;
+      });
     };
     place(left, margin); place(right, w - margin - bw);
     items.forEach(it => {
