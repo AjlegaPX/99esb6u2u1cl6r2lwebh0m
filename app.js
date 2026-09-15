@@ -1,4 +1,4 @@
-// app.js — сцена, разрез, слои, подписи, состояния (взрослые и детские), возраст, подлёт камеры, «вид пациента».
+// app.js — сцена, разрез, слои, подписи, состояния (взрослые и детские), возраст, подлёт камеры, «вид пациента», панель показа, сценарий показа.
 (() => {
   const $ = (s) => document.querySelector(s);
   const V3 = (x, y, z) => new THREE.Vector3(x, y, z);
@@ -16,16 +16,20 @@
   const isGlobe = (def) => ['shell', 'inner'].includes(def.group) || ['retinal_arteries', 'retinal_veins'].includes(def.id);
 
   // ---------- Конфигурация: что включено (config.js, поверх него переопределения из localStorage) ----------
-  const CFG_DEFAULT = { features: { age: true, childConditions: true, parents: true, treatments: true, callouts: true, normGhost: true, elements: true, changes: true, patientView: true, rays: true, fly: true, labels: true, layersPanel: true }, hideConditions: [], hideStructures: [], hideGroups: [] };
-  const FEATURE_NAMES = { age: 'Возраст пациента', childConditions: 'Детские проблемы', parents: 'Памятка для родителей', treatments: 'После лечения (операции)', callouts: 'Выносные подписи', normGhost: 'Контур нормы', elements: 'Элементы патологии', changes: 'Блок «Что меняется»', patientView: '«Как видит пациент»', rays: 'Ход лучей', fly: 'Автоподлёт камеры', labels: 'Подписи структур', layersPanel: 'Панель слоёв' };
+  const CFG_DEFAULT = { features: { age: true, childConditions: true, parents: true, treatments: true, callouts: true, normGhost: true, elements: true, changes: true, patientView: true, rays: true, fly: true, labels: true, layersPanel: true, scenario: true }, hideConditions: [], hideStructures: [], hideGroups: [], show: { context: 0.15, highlight: 0.7, pvAuto: true }, scenarios: [] };
+  const FEATURE_NAMES = { age: 'Возраст пациента', childConditions: 'Детские проблемы', parents: 'Памятка для родителей', treatments: 'После лечения (операции)', callouts: 'Выносные подписи', normGhost: 'Контур нормы', elements: 'Элементы патологии', changes: 'Блок «Что меняется»', patientView: '«Как видит пациент»', rays: 'Ход лучей', fly: 'Автоподлёт камеры', labels: 'Подписи структур', layersPanel: 'Панель слоёв', scenario: 'Сценарий показа' };
   function loadConfig() {
     const c = JSON.parse(JSON.stringify(CFG_DEFAULT));
-    const merge = (src) => { if (!src) return; if (src.features) Object.assign(c.features, src.features); ['hideConditions', 'hideStructures', 'hideGroups'].forEach(k => { if (Array.isArray(src[k])) c[k] = src[k].slice(); }); };
+    const merge = (src) => { if (!src) return; if (src.features) Object.assign(c.features, src.features); ['hideConditions', 'hideStructures', 'hideGroups', 'scenarios'].forEach(k => { if (Array.isArray(src[k])) c[k] = src[k].slice(); }); if (src.show) Object.assign(c.show, src.show); };
     merge(window.EYE_CONFIG);
     try { merge(JSON.parse(localStorage.getItem('eye3d.config') || 'null')); } catch (e) { /* хранилище недоступно */ }
     return c;
   }
   const cfg = loadConfig(), FT = cfg.features;
+  // Настройки показа: прозрачность остального, сила подсветки, окно пациента при показе изменения. Меняются на лету, хранятся в браузере.
+  const show = Object.assign({ context: 0.15, highlight: 0.7, pvAuto: true }, cfg.show, { pvFloat: false });
+  try { Object.assign(show, JSON.parse(localStorage.getItem('eye3d.show') || '{}'), { pvFloat: false }); } catch (e) { /* хранилище недоступно */ }
+  const saveShow = () => { try { localStorage.setItem('eye3d.show', JSON.stringify({ context: show.context, highlight: show.highlight, pvAuto: show.pvAuto })); } catch (e) { /* нет хранилища */ } };
   const condEnabled = (c) => !cfg.hideConditions.includes(c.id) && (FT.childConditions || c.group !== 'child');
   const structHidden = (id) => cfg.hideStructures.includes(id) || cfg.hideGroups.includes((byId[id] || {}).group);
 
@@ -219,7 +223,7 @@
   const focusDotV = new THREE.Mesh(new THREE.SphereGeometry(0.28, 12, 8), new THREE.MeshBasicMaterial({ color: 0xff9a3d })); focusDotV.visible = false; raysGroup.add(focusDotV);
   function updateRays() {
     const yRet = -E.R_ret - params.elong;
-    const yF = params.corrected ? yRet : -E.R_ret - (cond.ametropia.on ? 0 : params.physHyper * 0.35);
+    const yF = params.corrected ? yRet : -E.R_ret - (cond.ametropia.on || cond.child_myopia.on ? 0 : params.physHyper * 0.35);
     const yF2 = params.corrected ? yRet : yF + params.cyl * 0.35; // при астигматизме второй меридиан фокусируется раньше: две фокальные линии
     focusDot.position.set(0, yF, 0); focusDotV.position.set(0, yF2, 0); focusDotV.visible = params.cyl > 0;
     const a = EyeModel.lensArcs(1, params.lensThick);
@@ -434,6 +438,7 @@
     return list.length ? list[list.length - 1] : null;
   }
   const pulse = { until: 0 };
+  let demoUntil = 0, pvAutoPinned = false, quietUI = false; // усиленная подсветка на время анимации; окно пациента, открытое автоматически; без открытия панелей на телефоне
   function setFocus(id, opts = {}) {
     focus.cond = id;
     const on = !!id && cond[id].on;
@@ -450,6 +455,7 @@
       if (opts.demo) setTimeout(() => { if (cond[id].on && focus.cond === id) demo(id); }, ui.fly && !opts.noFly ? 950 : 150);
     }
     document.querySelectorAll('.cond').forEach(b => b.classList.toggle('focus', on && b.dataset.cond === id));
+    if (!on && pvAutoPinned) setPvFloat(false);
     applyOpacity(); updateLabels(); updateMarker();
   }
   function conditionView(c) {
@@ -462,7 +468,7 @@
     markerObj.visible = !!(v && v.marker);
     markerDiv.style.display = markerObj.visible ? '' : 'none';
     if (v && v.marker) {
-      markerObj.position.set(...v.marker); if (focus.cond === 'ametropia') markerObj.position.y -= params.elong;
+      markerObj.position.set(...v.marker); if (focus.cond === 'ametropia' || focus.cond === 'child_myopia') markerObj.position.y -= params.elong;
       const c = condById[focus.cond], p = c.params[0], tr = activeTreatment(c.id);
       markerDiv.textContent = (v.short || c.name) + (p ? ' · ' + fmt(cond[c.id][p.id], p) : '') + (tr ? ' · после лечения' : '');
       markerDiv.classList.toggle('post', !!tr);
@@ -523,11 +529,11 @@
     const tx = {}; CONDITIONS.forEach(x => tx[x.id] = TX(x.id)); // эффекты выбранного лечения
     // --- геометрические параметры ---
     const cg = c.congenital_glaucoma.on ? c.congenital_glaucoma.severity / 100 : 0;
-    params.elong = c.ametropia.on ? -c.ametropia.diopters * 0.35 : 0;
+    params.elong = (c.ametropia.on ? -c.ametropia.diopters * 0.35 : 0) + (c.child_myopia.on ? -c.child_myopia.diopters * 0.35 : 0);
     params.cone = (c.keratoconus.on ? c.keratoconus.severity / 100 : 0) * (tx.keratoconus.coneScale !== undefined ? tx.keratoconus.coneScale : 1);
     params.cdr = c.glaucoma.on ? c.glaucoma.cdr : (cg ? 0.3 + 0.55 * cg : 0.3);
     params.bombe = (c.glaucoma.on && c.glaucoma.type === 'closed' && !tx.glaucoma.bombeZero) ? 0.55 : 0;
-    params.pupil = ap.pupil;
+    params.pupil = ap.pupil * (tx.child_myopia.pupilWide ? 1.3 : 1); // атропин 0,01 % слегка расширяет зрачок
     params.limbScale = ap.limb * (1 + 0.3 * cg);
     params.lensThick = ap.lensThick;
     params.ptosis = c.ptosis.on ? c.ptosis.drop * (1 - (tx.ptosis.dropFix || 0)) : 0;
@@ -535,15 +541,15 @@
     params.atrophy = c.glaucoma.on ? Math.min(1, (c.glaucoma.cdr - 0.3) / 0.65) : cg * 0.6; // истончение зрительного нерва
     params.cyl = c.astigmatism.on ? c.astigmatism.cyl : 0;
     params.astig = tx.astigmatism.astigZero ? 0 : params.cyl * 0.06; params.astigAxis = c.astigmatism.on ? c.astigmatism.axis : 0; // преувеличено ради наглядности
-    params.ablation = tx.ametropia.ablation ? -c.ametropia.diopters * 0.03 : 0; // лазерная коррекция: уплощение центра (преувеличено)
-    params.corrected = !!(tx.ametropia.corrected || tx.astigmatism.corrected);
+    params.ablation = (tx.ametropia.ablation ? -c.ametropia.diopters * 0.03 : 0) + (tx.child_myopia.okFlat ? -c.child_myopia.diopters * 0.03 : 0); // лазерная коррекция или ночные линзы: уплощение центра (преувеличено)
+    params.corrected = !!(tx.ametropia.corrected || tx.astigmatism.corrected || tx.child_myopia.corrected);
     // ИОЛ вместо хрусталика; витрэктомия убирает стекловидное тело
     const iolOn = !!(tx.cataract.iol || tx.congenital_cataract.iol || tx.ametropia.iol || tx.astigmatism.iol);
     [S.lens, S.lens_nucleus].forEach(e => { if (e.surgHidden !== iolOn) { e.surgHidden = iolOn; refreshVisibility(e); } });
     const vitGone = !!(tx.detachment.vitreousGone || tx.diabetic.vitreousGone);
     if (S.vitreous.surgHidden !== vitGone) { S.vitreous.surgHidden = vitGone; refreshVisibility(S.vitreous); }
     surg.iol.visible = iolOn; surg.iolHaptics.visible = iolOn;
-    surg.icl.visible = !!tx.ametropia.icl; surg.spectacle.visible = !!tx.astigmatism.spectacle;
+    surg.icl.visible = !!tx.ametropia.icl; surg.spectacle.visible = !!(tx.astigmatism.spectacle || tx.child_myopia.spectacle);
     surg.bleb.visible = !!tx.glaucoma.bleb; surg.shunt.visible = !!tx.glaucoma.shunt; surg.iridotomy.visible = !!tx.glaucoma.iridotomy; surg.sltSpots.visible = !!tx.glaucoma.sltSpots;
     surg.graft.visible = !!tx.keratoconus.graft; surg.icrs.visible = !!tx.keratoconus.icrs;
     const syrOn = !!(tx.amd.syringe || tx.diabetic.syringe || tx.crvo.syringe || tx.rop.syringe);
@@ -801,7 +807,7 @@
     const rel = (id) => 1 - (((activeTreatment(id) || {}).effects || {}).relief || 0); // насколько лечение снимает жалобы
     const cat = (c.cataract.on ? c.cataract.severity / 100 : 0) * rel('cataract'), ct = c.cataract.type;
     const cc = (c.congenital_cataract.on ? c.congenital_cataract.severity / 100 : 0) * rel('congenital_cataract');
-    const D = (c.ametropia.on ? Math.abs(c.ametropia.diopters) : 0) * rel('ametropia');
+    const D = (c.ametropia.on ? Math.abs(c.ametropia.diopters) : 0) * rel('ametropia') + (c.child_myopia.on ? -c.child_myopia.diopters : 0) * rel('child_myopia');
     const cone = (c.keratoconus.on ? c.keratoconus.severity / 100 : 0) * rel('keratoconus');
     const gk = c.glaucoma.on ? Math.min(1, (c.glaucoma.cdr - 0.3) / 0.65) : 0; // выпавшее поле зрения при глаукоме не возвращается
     const cg = (c.congenital_glaucoma.on ? c.congenital_glaucoma.severity / 100 : 0) * rel('congenital_glaucoma');
@@ -850,7 +856,8 @@
     const notes = [];
     if (cat) notes.push(ct === 'nuclear' ? 'Катаракта: туман, желтизна, ослепление от света.' : ct === 'cortical' ? 'Катаракта: блики и двоение от периферических помутнений.' : 'Катаракта: резкое ухудшение при ярком свете и вблизи.');
     if (cc) notes.push('Врождённая катаракта: ребёнок видит только свет и тени, зрительная кора не развивается.');
-    if (D) notes.push(c.ametropia.diopters < 0 ? 'Близорукость без очков: вдаль размыто.' : 'Дальнозоркость без очков: нечётко и утомительно.');
+    if (c.ametropia.on && c.ametropia.diopters !== 0 && rel('ametropia') > 0) notes.push(c.ametropia.diopters < 0 ? 'Близорукость без очков: вдаль размыто.' : 'Дальнозоркость без очков: нечётко и утомительно.');
+    if (c.child_myopia.on && c.child_myopia.diopters < 0 && rel('child_myopia') > 0) notes.push('Близорукость у ребёнка: доска и лица вдали размыты, книга вблизи чёткая.');
     if (cone) notes.push('Кератоконус: двоение и искажения.');
     if (ast) notes.push('Астигматизм: линии одного направления размыты, буквы «тянутся» в сторону.');
     if (gk) notes.push('Глаукома: выпадение периферии поля зрения.');
@@ -911,6 +918,7 @@
   }
   // В режиме проблемы: затронутое ярко, несколько соседних структур бледно для ориентира, остальные слои скрыты
   const DEFAULT_CONTEXT = ['sclera', 'cornea', 'retina', 'iris'];
+  const focusEmissive = () => new THREE.Color(0x3a2208).multiplyScalar(0.6 + 1.3 * show.highlight).getHex(); // тёплая подсветка затронутого, сила по ползунку
   function applyOpacity() {
     const F = focusSet();
     const ctx = F ? new Set(conditionView(condById[focus.cond]).context || DEFAULT_CONTEXT) : null;
@@ -919,8 +927,8 @@
       let op = Math.min(1, e.baseOpacity) * groupOpacity[s.group];
       let emissive = 0, hide = false;
       if (F) {
-        if (F.has(s.id)) { op = Math.min(1, Math.max(op, e.baseOpacity < 1 ? e.baseOpacity + 0.4 : 1)); emissive = 0x3a2208; }
-        else if (ctx.has(s.id) || s.id === selectedId) op = Math.min(op, 0.22);
+        if (F.has(s.id)) { op = Math.min(1, Math.max(op, e.baseOpacity < 1 ? e.baseOpacity + 0.3 + 0.5 * show.highlight : 1)); emissive = focusEmissive(); }
+        else if (ctx.has(s.id) || s.id === selectedId) { const co = s.id === selectedId ? Math.max(show.context, 0.3) : show.context; if (co < 0.01) hide = true; else op = Math.min(op, co); }
         else hide = true;
       }
       if (e.focusHidden !== hide) { e.focusHidden = hide; refreshVisibility(e); }
@@ -952,7 +960,7 @@
       ${links ? `<div class="links">${links}</div>` : ''}`;
     $('#info').querySelectorAll('[data-cond]').forEach(b => b.addEventListener('click', () => enableCondition(b.dataset.cond)));
     syncLayerUI();
-    if (isMobile()) { $('#right').classList.add('open'); $('#left').classList.remove('open'); syncMobileBar(); }
+    if (isMobile() && !quietUI) { $('#right').classList.add('open'); $('#left').classList.remove('open'); syncMobileBar(); }
   }
 
   const raycaster = new THREE.Raycaster();
@@ -1109,6 +1117,7 @@
       else if (c.id === 'glaucoma') note.textContent = cond.glaucoma.iop > 21 ? `ВГД ${cond.glaucoma.iop} мм рт. ст. — выше нормы (10–21).` : `ВГД ${cond.glaucoma.iop} мм рт. ст. — в пределах нормы; возможна глаукома нормального давления.`;
       else if (c.id === 'congenital_glaucoma') note.textContent = `ВГД ${cond.congenital_glaucoma.iop} мм рт. ст.; роговица увеличена примерно до ${(stop().cornea * (1 + 0.3 * cond.congenital_glaucoma.severity / 100)).toFixed(1)} мм, глаз растянут.`;
       else if (c.id === 'ametropia') { const d = cond.ametropia.diopters; note.textContent = d === 0 ? 'Эмметропия: фокус на сетчатке.' : d < 0 ? `Миопия ${d} дптр: глаз длиннее нормы примерно на ${(-d * 0.35).toFixed(1)} мм, фокус перед сетчаткой.` : `Гиперметропия +${d} дптр: глаз короче нормы примерно на ${(d * 0.35).toFixed(1)} мм, фокус за сетчаткой.`; }
+      else if (c.id === 'child_myopia') { const v = cond.child_myopia, slow = TX('child_myopia').slow || 0, yrs = Math.max(0, 18 - stop().years), fut = v.diopters - v.progress * (1 - slow) * yrs, fmtD = (x) => x.toFixed(2).replace(/\.?0+$/, ''); note.textContent = v.diopters === 0 ? 'Пока эмметропия: фокус на сетчатке.' : `Миопия ${v.diopters} дптр: глаз длиннее нормы для возраста примерно на ${(-v.diopters * 0.35).toFixed(1)} мм, фокус перед сетчаткой. При ${v.progress} дптр/год${slow ? ` (лечение замедляет рост на ${Math.round(slow * 100)} %)` : ''}${yrs ? ` к 18 годам около ${fmtD(fut)} дптр${fut <= -6 ? ' — высокая близорукость, растянутая сетчатка требует осмотров' : ''}` : ' у взрослого рост обычно остановлен'}.`; }
       else if (c.id === 'strabismus') { const a = cond.strabismus.angle; note.textContent = a === 0 ? 'Оси параллельны.' : a > 0 ? `Сходящееся косоглазие (эзотропия) ${a}°: глаз отклонён к носу, красная ось — куда смотрит косящий глаз, серая — куда должен.` : `Расходящееся косоглазие (экзотропия) ${-a}°: глаз отклонён к виску.`; }
       else if (c.id === 'rop') note.textContent = ['', 'Стадия 1: тонкая демаркационная линия между сосудистой и бессосудистой сетчаткой.', 'Стадия 2: линия превращается в вал.', 'Стадия 3: на валу растут патологические сосуды — порог для лечения (лазер, анти-VEGF).', 'Стадия 4: частичная тракционная отслойка сетчатки.', 'Стадия 5: тотальная отслойка, «воронка».'][cond.rop.stage] || '';
       else if (c.id === 'ptosis') { const d = cond.ptosis.drop; note.textContent = d >= 4.6 ? `Край века ниже центра зрачка на ${(d - 4.6).toFixed(1)} мм: зрачок перекрыт, риск амблиопии.` : `Край века на ${(4.6 - d).toFixed(1)} мм выше центра зрачка.`; }
@@ -1132,6 +1141,8 @@
     const start = p.id === 'cdr' ? 0.3 : p.id === 'stage' ? 1 : p.min > 0 ? p.min : 0;
     if (demoTimer) cancelAnimationFrame(demoTimer);
     const t0 = performance.now(), ms = 1800;
+    pulse.until = Math.max(pulse.until, t0 + ms + 500); demoUntil = t0 + ms + 500; // подсветка держится всю анимацию и усилена
+    if (show.pvAuto && FT.patientView && !show.pvFloat) setPvFloat(true, true); // окно пациента поверх модели, чтобы не прокручивать панель
     const step = () => {
       const k = Math.min(1, (performance.now() - t0) / ms), e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
       let v = start + (end - start) * e; v = Math.round(v / p.step) * p.step;
@@ -1161,6 +1172,7 @@
   function applyConfigToLayout() {
     $('#ageSec').hidden = !FT.age;
     $('#patient').hidden = !FT.patientView;
+    $('#scenarioSec').hidden = !FT.scenario;
     $('#raysOn').closest('label').hidden = !FT.rays;
     $('#labelsOn').checked = FT.labels; $('#flyOn').checked = FT.fly;
     if (!FT.layersPanel) { $('#app').classList.add('no-left'); $('#toggleLeft').hidden = true; }
@@ -1315,7 +1327,7 @@
     const now = performance.now();
     if (now < pulse.until) {
       const F = focusSet();
-      if (F) { const k = 0.5 + 0.5 * Math.sin(now / 130); F.forEach(id => { const e = S[id]; if (!e) return; e.mesh.material.emissive.setRGB(0.22 + 0.38 * k, 0.1 + 0.16 * k, 0.02); if (e.cap) e.cap.material.emissive.copy(e.mesh.material.emissive); }); }
+      if (F) { const amp = (0.6 + 0.9 * show.highlight) * (now < demoUntil ? 1.35 : 1), k = 0.5 + 0.5 * Math.sin(now / 130); F.forEach(id => { const e = S[id]; if (!e) return; e.mesh.material.emissive.setRGB((0.22 + 0.38 * k) * amp, (0.1 + 0.16 * k) * amp, 0.02 * amp); if (e.cap) e.cap.material.emissive.copy(e.mesh.material.emissive); }); }
       markerDiv.classList.toggle('pulse', true); pulseWasOn = true;
     } else if (pulseWasOn) { pulseWasOn = false; markerDiv.classList.remove('pulse'); applyOpacity(); }
     renderer.render(scene, camera);
@@ -1325,11 +1337,200 @@
   }
   function loop() { render(); requestAnimationFrame(loop); }
 
+  // ---------- Панель показа поверх сцены: прозрачность остального, подсветка, окно «Как видит пациент» ----------
+  const pvFloatEl = $('#pvFloat'), pvHome = $('#patient');
+  function setPvFloat(on, auto) {
+    on = !!on && FT.patientView;
+    if (show.pvFloat !== on) {
+      show.pvFloat = on;
+      const dst = on ? pvFloatEl.querySelector('.pvf-body') : pvHome;
+      dst.appendChild($('#pv')); dst.appendChild($('#pvNote'));
+      pvFloatEl.hidden = !on; $('#pvAway').hidden = !on;
+      $('#pvPin').classList.toggle('on', on);
+    }
+    pvAutoPinned = on && !!auto;
+  }
+  function buildShowBar() {
+    const ctx = $('#ctxOp'), hl = $('#hl');
+    const sync = () => { ctx.value = Math.round((1 - show.context) * 100); $('#ctxOpVal').textContent = ctx.value + ' %'; hl.value = Math.round(show.highlight * 100); $('#hlVal').textContent = hl.value + ' %'; $('#pvAuto').checked = !!show.pvAuto; };
+    sync();
+    ctx.addEventListener('input', () => { show.context = (100 - ctx.value) / 100; sync(); saveShow(); applyOpacity(); });
+    hl.addEventListener('input', () => { show.highlight = hl.value / 100; sync(); saveShow(); applyOpacity(); pulse.until = performance.now() + 700; });
+    $('#pvAuto').addEventListener('change', (e) => { show.pvAuto = e.target.checked; saveShow(); });
+    $('#pvPin').addEventListener('click', () => setPvFloat(!show.pvFloat));
+    $('#pvPin2').addEventListener('click', () => setPvFloat(true));
+    $('#pvUnpin').addEventListener('click', () => setPvFloat(false));
+    $('#showbarToggle').addEventListener('click', () => $('#showbar').classList.toggle(isMobile() ? 'open' : 'collapsed')); // на телефоне свёрнута по умолчанию
+    if (!FT.patientView) { $('#pvPin').hidden = true; $('#pvAuto').closest('label').hidden = true; }
+    // окно пациента можно перетащить за заголовок
+    const head = pvFloatEl.querySelector('.pvf-head'); let drag = null;
+    head.addEventListener('pointerdown', (e) => { if (e.target.closest('button')) return; const r = pvFloatEl.getBoundingClientRect(), vr = view.getBoundingClientRect(); drag = { dx: e.clientX - r.left, dy: e.clientY - r.top, vr }; head.setPointerCapture(e.pointerId); });
+    head.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      const x = Math.max(0, Math.min(drag.vr.width - pvFloatEl.offsetWidth, e.clientX - drag.vr.left - drag.dx)), y = Math.max(0, Math.min(drag.vr.height - pvFloatEl.offsetHeight, e.clientY - drag.vr.top - drag.dy));
+      Object.assign(pvFloatEl.style, { left: x + 'px', top: y + 'px', right: 'auto', bottom: 'auto' });
+    });
+    head.addEventListener('pointerup', () => { drag = null; });
+    head.addEventListener('pointercancel', () => { drag = null; });
+  }
+
+  // ---------- Сценарий показа: цепочка сохранённых состояний модели, проигрывается кнопками «Далее»/«Назад» ----------
+  const SC_KEY = 'eye3d.scenarios';
+  let scenarios = [], scCur = 0, scEditIdx = -1, play = null;
+  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+  function loadScenarios() {
+    let list = null;
+    try { list = JSON.parse(localStorage.getItem(SC_KEY) || 'null'); } catch (e) { /* хранилище недоступно */ }
+    if (!Array.isArray(list) || !list.length) list = JSON.parse(JSON.stringify(cfg.scenarios || []));
+    if (!list.length) list = [{ name: 'Сценарий 1', steps: [], locked: false }];
+    scenarios = list.map(s => ({ name: String(s.name || 'Сценарий'), steps: Array.isArray(s.steps) ? s.steps.filter(x => x && typeof x === 'object') : [], locked: !!s.locked }));
+    scCur = 0;
+  }
+  const saveScenarios = () => { try { localStorage.setItem(SC_KEY, JSON.stringify(scenarios)); } catch (e) { /* нет хранилища */ } };
+  // Снимок всего, что видно: возраст, разрез, камера, включённые проблемы с параметрами и лечением, выделение, скрытые слои
+  function captureState() {
+    const conds = {};
+    CONDITIONS.forEach(c => { if (cond[c.id].on) { conds[c.id] = Object.assign({}, cond[c.id]); delete conds[c.id].on; conds[c.id].treat = treat[c.id].id || null; } });
+    const r2 = (v) => Math.round(v * 100) / 100;
+    return {
+      age: age.idx, clip: Object.assign({}, clip), cam: { pos: camera.position.toArray().map(r2), target: controls.target.toArray().map(r2) },
+      conds, focus: focus.cond && cond[focus.cond].on ? focus.cond : null, selected: selectedId, rays: ui.rays, labels: ui.labels,
+      hidden: STRUCTURES.filter(s => !S[s.id].visible && !structHidden(s.id)).map(s => s.id),
+    };
+  }
+  function applyState(st, opts = {}) {
+    st = st || {};
+    if (demoTimer) { cancelAnimationFrame(demoTimer); demoTimer = null; }
+    quietUI = true;
+    age.idx = st.age === undefined ? AGE_STOPS.length - 1 : Math.min(AGE_STOPS.length - 1, Math.max(0, parseInt(st.age, 10) || 0)); $('#age').value = age.idx;
+    CONDITIONS.forEach(c => {
+      const s = st.conds && st.conds[c.id], cur = cond[c.id];
+      cur.on = !!s;
+      if (c.options) cur[c.options.id] = s && c.options.values.some(v => v.id === s[c.options.id]) ? s[c.options.id] : c.options.values[0].id;
+      c.params.forEach(p => { cur[p.id] = s && typeof s[p.id] === 'number' ? Math.min(p.max, Math.max(p.min, s[p.id])) : p.def; });
+      treat[c.id].id = s && s.treat && (TREATMENTS[c.id] || []).some(t => t.id === s.treat) ? s.treat : null;
+      syncCondBoxes(c.id);
+      boxesOf(c.id).forEach(box => { const sel = box.querySelector('.copt'); if (sel && c.options) sel.value = cur[c.options.id]; });
+    });
+    const hid = new Set(Array.isArray(st.hidden) ? st.hidden : []);
+    STRUCTURES.forEach(s => setVisible(s.id, !hid.has(s.id)));
+    ui.rays = !!st.rays; $('#raysOn').checked = ui.rays; raysGroup.visible = ui.rays;
+    ui.labels = st.labels !== false; $('#labelsOn').checked = ui.labels;
+    if (st.clip) { Object.assign(clip, st.clip); updateClipPlane(); }
+    applyConditions(); syncCondGroups();
+    if (st.selected && S[st.selected]) select(st.selected); else { selectedId = null; syncLayerUI(); }
+    setFocus(st.focus && cond[st.focus] && cond[st.focus].on ? st.focus : null, { noFly: true, keepAge: true });
+    if (st.cam && Array.isArray(st.cam.pos) && Array.isArray(st.cam.target)) { flyTo(st.cam.pos, st.cam.target, opts.instant ? 1 : 900); $('#views').querySelectorAll('button').forEach(x => x.classList.remove('on')); }
+    updateMarker(); updateLabels();
+    quietUI = false;
+  }
+  function autoLabel(st) {
+    const parts = [], ids = Object.keys(st.conds || {});
+    if (st.age !== undefined && st.age < AGE_STOPS.length - 1 && AGE_STOPS[st.age]) parts.push(AGE_STOPS[st.age].label);
+    ids.forEach(id => {
+      const c = condById[id]; if (!c) return; const s = st.conds[id];
+      let t = (c.short || c.name).replace(/\s*\(.*\)/, '');
+      if (c.options) { const o = c.options.values.find(v => v.id === s[c.options.id]); if (o) t += ', ' + o.label.toLowerCase(); }
+      const p = c.params[0]; if (p && typeof s[p.id] === 'number') t += ' ' + fmt(s[p.id], p);
+      if (s.treat) { const tr = (TREATMENTS[id] || []).find(x => x.id === s.treat); if (tr) t += ' → ' + tr.name.replace(/\s*\(.*\)/, ''); }
+      parts.push(t);
+    });
+    if (!ids.length) parts.push('Норма');
+    if (st.selected && byId[st.selected]) parts.push('карточка: ' + byId[st.selected].name.replace(/\s*\(.*\)/, ''));
+    return parts.join(' · ');
+  }
+  function applyStep(st, i) {
+    applyState(st.state || {});
+    setPvFloat(!!st.pv);
+    const f = st.state && st.state.focus;
+    if (st.demo && f && cond[f] && cond[f].on) setTimeout(() => { if (i === undefined || (play && play.i === i)) demo(f); }, 950);
+  }
+  function startPlay(idx, i = 0) {
+    const sc = scenarios[idx]; if (!sc || !sc.steps.length) return;
+    play = { sc: idx, i: 0 };
+    $('#playbar').hidden = false; $('#hint').hidden = true; view.classList.add('playing');
+    if (isMobile()) { $('#left').classList.remove('open'); $('#right').classList.remove('open'); syncMobileBar(); }
+    playStep(Math.min(i, sc.steps.length - 1));
+  }
+  function playStep(i) {
+    if (!play) return; const sc = scenarios[play.sc]; if (!sc || i < 0 || i >= sc.steps.length) return;
+    play.i = i; const st = sc.steps[i], last = i === sc.steps.length - 1;
+    $('#playTitle').textContent = `${sc.name} · шаг ${i + 1} из ${sc.steps.length}: ${st.label || ''}`;
+    $('#playNote').textContent = st.note || ''; $('#playNote').hidden = !st.note;
+    $('#playPrev').disabled = i === 0; $('#playNext').textContent = last ? 'Готово' : '▶'; $('#playNext').title = last ? 'Закончить показ' : 'Следующий шаг (→ или пробел)';
+    applyStep(st, i);
+    if (scCur === play.sc) renderScenario();
+  }
+  function stopPlay() { if (!play) return; play = null; $('#playbar').hidden = true; $('#hint').hidden = false; view.classList.remove('playing'); renderScenario(); }
+  function renderScenario() {
+    const sel = $('#scSelect'); sel.innerHTML = scenarios.map((s, i) => `<option value="${i}">${esc(s.name)}${s.locked ? ' ✓' : ''}</option>`).join(''); sel.value = String(scCur);
+    const sc = scenarios[scCur], ol = $('#scSteps'); ol.innerHTML = '';
+    sc.steps.forEach((st, i) => {
+      const li = document.createElement('li'); li.className = 'step' + (scEditIdx === i ? ' sel' : '') + (play && play.sc === scCur && play.i === i ? ' cur' : '');
+      li.innerHTML = `<span class="lbl" title="Показать этот шаг на модели">${esc(st.label)}</span><span class="flags">${st.demo ? '<span title="проигрывается изменение от нормы">▶</span>' : ''}${st.pv ? '<span title="окно «Как видит пациент» поверх модели">◉</span>' : ''}</span>` +
+        (sc.locked ? '' : `<span class="ops"><button class="iso up" title="Выше">▲</button><button class="iso down" title="Ниже">▼</button><button class="iso edit" title="Изменить">✎</button><button class="iso del" title="Удалить шаг">✕</button></span>`);
+      li.querySelector('.lbl').addEventListener('click', () => applyStep(st));
+      if (!sc.locked) {
+        li.querySelector('.up').addEventListener('click', () => { if (i > 0) { [sc.steps[i - 1], sc.steps[i]] = [sc.steps[i], sc.steps[i - 1]]; if (scEditIdx === i) scEditIdx = i - 1; saveScenarios(); renderScenario(); } });
+        li.querySelector('.down').addEventListener('click', () => { if (i < sc.steps.length - 1) { [sc.steps[i + 1], sc.steps[i]] = [sc.steps[i], sc.steps[i + 1]]; if (scEditIdx === i) scEditIdx = i + 1; saveScenarios(); renderScenario(); } });
+        li.querySelector('.edit').addEventListener('click', () => { scEditIdx = scEditIdx === i ? -1 : i; renderScenario(); });
+        li.querySelector('.del').addEventListener('click', () => { sc.steps.splice(i, 1); scEditIdx = -1; saveScenarios(); renderScenario(); });
+      }
+      ol.appendChild(li);
+    });
+    if (!sc.steps.length) ol.innerHTML = '<li class="empty">Шагов пока нет. Настройте модель и нажмите «Запомнить шаг».</li>';
+    $('#scAdd').hidden = sc.locked; $('#scLock').textContent = sc.locked ? 'Изменить' : 'Зафиксировать'; $('#scLock').title = sc.locked ? 'Разрешить правку шагов' : 'Сохранить порядок и закрыть от случайных правок';
+    $('#scPlay').disabled = !sc.steps.length;
+    const ed = $('#scEdit'); ed.hidden = scEditIdx < 0 || sc.locked || !sc.steps[scEditIdx];
+    if (!ed.hidden) renderStepEdit(sc.steps[scEditIdx]);
+  }
+  function renderStepEdit(st) {
+    const ed = $('#scEdit');
+    ed.innerHTML = `<label>Название шага<input type="text" id="seLabel"></label><label>Подсказка врачу, видна во время показа<textarea id="seNote" rows="2"></textarea></label>` +
+      `<label class="chk"><input type="checkbox" id="seDemo"> проиграть изменение от нормы</label><label class="chk"><input type="checkbox" id="sePv"> окно «Как видит пациент» поверх модели</label>` +
+      `<div class="sc-tools"><button class="btn" id="seRecap" title="Заменить сохранённое состояние тем, что сейчас на модели">Обновить из модели</button><button class="btn" id="seDone">Готово</button></div>`;
+    $('#seLabel').value = st.label || ''; $('#seNote').value = st.note || ''; $('#seDemo').checked = !!st.demo; $('#sePv').checked = !!st.pv;
+    $('#seLabel').addEventListener('input', (e) => { st.label = e.target.value; saveScenarios(); const li = $('#scSteps li.sel .lbl'); if (li) li.textContent = st.label; });
+    $('#seNote').addEventListener('input', (e) => { st.note = e.target.value; saveScenarios(); });
+    $('#seDemo').addEventListener('change', (e) => { st.demo = e.target.checked; saveScenarios(); });
+    $('#sePv').addEventListener('change', (e) => { st.pv = e.target.checked; saveScenarios(); });
+    $('#seRecap').addEventListener('click', () => { const auto = st.label === autoLabel(st.state || {}); st.state = captureState(); if (auto) st.label = autoLabel(st.state); saveScenarios(); renderScenario(); });
+    $('#seDone').addEventListener('click', () => { scEditIdx = -1; renderScenario(); });
+  }
+  function buildScenario() {
+    loadScenarios();
+    const cur = () => scenarios[scCur];
+    $('#scSelect').addEventListener('change', (e) => { scCur = parseInt(e.target.value, 10) || 0; scEditIdx = -1; renderScenario(); });
+    $('#scNew').addEventListener('click', () => { const name = window.prompt('Название сценария', `Сценарий ${scenarios.length + 1}`); if (name === null) return; scenarios.push({ name: name.trim() || `Сценарий ${scenarios.length + 1}`, steps: [], locked: false }); scCur = scenarios.length - 1; scEditIdx = -1; saveScenarios(); renderScenario(); });
+    $('#scRename').addEventListener('click', () => { const name = window.prompt('Новое название', cur().name); if (name === null || !name.trim()) return; cur().name = name.trim(); saveScenarios(); renderScenario(); });
+    $('#scDelete').addEventListener('click', () => { if (!window.confirm(`Удалить сценарий «${cur().name}»?`)) return; scenarios.splice(scCur, 1); if (!scenarios.length) scenarios.push({ name: 'Сценарий 1', steps: [], locked: false }); scCur = Math.max(0, Math.min(scCur, scenarios.length - 1)); scEditIdx = -1; saveScenarios(); renderScenario(); });
+    $('#scAdd').addEventListener('click', () => { const sc = cur(); if (sc.locked) return; const state = captureState(); sc.steps.push({ label: autoLabel(state), note: '', demo: !!state.focus, pv: show.pvFloat, state }); scEditIdx = sc.steps.length - 1; saveScenarios(); renderScenario(); });
+    $('#scLock').addEventListener('click', () => { const sc = cur(); sc.locked = !sc.locked; scEditIdx = -1; saveScenarios(); renderScenario(); });
+    $('#scPlay').addEventListener('click', () => startPlay(scCur, 0));
+    $('#scCopy').addEventListener('click', () => {
+      const sc = cur(), json = JSON.stringify({ name: sc.name, locked: true, steps: sc.steps }, null, 1), b = $('#scCopy');
+      const done = () => { b.textContent = 'Скопировано ✓'; setTimeout(() => { b.textContent = 'JSON'; }, 1800); };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(json).then(done, () => window.prompt('Скопируйте текст сценария', json)); else window.prompt('Скопируйте текст сценария', json);
+    });
+    $('#playPrev').addEventListener('click', () => { if (play) playStep(play.i - 1); });
+    $('#playNext').addEventListener('click', () => { if (!play) return; if (play.i >= scenarios[play.sc].steps.length - 1) stopPlay(); else playStep(play.i + 1); });
+    $('#playStop').addEventListener('click', stopPlay);
+    document.addEventListener('keydown', (e) => {
+      if (!play || e.target.matches('input, select, textarea')) return;
+      if (e.key === 'ArrowRight' || e.key === ' ' || e.key === 'PageDown') { e.preventDefault(); $('#playNext').click(); }
+      else if (e.key === 'ArrowLeft' || e.key === 'PageUp') { e.preventDefault(); playStep(play.i - 1); }
+      else if (e.key === 'Escape') stopPlay();
+    });
+    renderScenario();
+  }
+
   // ---------- Старт ----------
   buildLayers();
   buildConditions();
   buildParents();
   buildSettings();
+  buildShowBar();
+  buildScenario();
   STRUCTURES.filter(s => ['adnexa', 'muscles', 'orbit'].includes(s.group) || ['cloquet', 'posterior_chamber'].includes(s.id)).forEach(s => setVisible(s.id, false));
   applyConfigToLayout();
   applyOpacity();
@@ -1359,6 +1560,14 @@
     resetConfig: () => { try { localStorage.removeItem('eye3d.config'); } catch (e) {} location.reload(); },
     setAge: (years) => setAgeByYears(years), setAgeIndex: (i) => { age.idx = i; $('#age').value = i; applyConditions(); syncCondGroups(); },
     setFly: (on) => { ui.fly = !!on; $('#flyOn').checked = ui.fly; },
+    setShow: (o) => { Object.assign(show, o || {}); saveShow(); applyOpacity(); }, getShow: () => Object.assign({}, show),
+    setPatientFloat: (on) => setPvFloat(on),
+    scenarios: {
+      list: () => scenarios.map(s => s.name), get: () => JSON.parse(JSON.stringify(scenarios)),
+      set: (list) => { if (Array.isArray(list) && list.length) { scenarios = JSON.parse(JSON.stringify(list)); scCur = 0; scEditIdx = -1; saveScenarios(); renderScenario(); } },
+      play: (name, i = 0) => { const idx = typeof name === 'number' ? name : scenarios.findIndex(s => s.name === name); if (idx >= 0) startPlay(idx, i); },
+      next: () => $('#playNext').click(), prev: () => { if (play) playStep(play.i - 1); }, stop: stopPlay, capture: captureState, apply: applyState,
+    },
     getState: () => ({ clip: Object.assign({}, clip), age: stop(), conditions: JSON.parse(JSON.stringify(cond)), visible: Object.fromEntries(STRUCTURES.map(s => [s.id, S[s.id].visible])) }),
     camera, controls, scene,
   };

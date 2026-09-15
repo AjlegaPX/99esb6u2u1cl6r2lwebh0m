@@ -28,6 +28,7 @@
     --shadow: 0 1px 3px rgba(0,0,0,.45);
   }
   * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
   html, body { height: 100%; margin: 0; }
   body { background: var(--bg); color: var(--text); font: 14px/1.45 var(--font-ui); overflow: hidden; font-variant-numeric: tabular-nums; }
   button, input, select { font-family: var(--font-ui); }
@@ -193,6 +194,56 @@
   #pv .ov { position: absolute; inset: 0; pointer-events: none; }
   #pvNote { font-size: 12px; color: var(--muted); margin-top: 6px; }
 
+  /* панель показа поверх сцены: прозрачность остального, подсветка, окно пациента */
+  #showbar { position: absolute; right: 10px; top: 10px; z-index: 3; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+  #showbar .sb-toggle { font-size: 11.5px; padding: 3px 8px; opacity: .92; }
+  #showbar .sb-body { width: 216px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px 8px; box-shadow: var(--shadow); font-size: 11.5px; display: flex; flex-direction: column; gap: 4px; }
+  #showbar.collapsed .sb-body { display: none; }
+  @media (max-width: 980px) { #showbar:not(.open) .sb-body { display: none; } }
+  #showbar label { display: block; color: var(--muted); }
+  #showbar label .v { float: right; color: var(--text); }
+  #showbar input[type=range] { width: 100%; margin: 2px 0 0; }
+  #showbar .chk { display: flex; color: var(--text); margin-top: 2px; }
+  #showbar .btn { align-self: stretch; margin-top: 2px; }
+  #showbar .btn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+  /* окно «Как видит пациент» поверх сцены */
+  #pvFloat { position: absolute; right: 10px; bottom: 34px; width: 300px; max-width: calc(100% - 20px); z-index: 4; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px 8px; box-shadow: 0 2px 10px rgba(0,0,0,.25); }
+  #pvFloat .pvf-head { display: flex; justify-content: space-between; align-items: center; font-weight: 600; font-size: 12px; cursor: move; margin-bottom: 5px; user-select: none; touch-action: none; }
+  #pvFloat #pvNote { font-size: 11.5px; }
+  #patient .panel-title .lbl { float: right; text-transform: none; letter-spacing: 0; font-weight: 400; }
+  /* строка показа сценария */
+  #playbar { position: absolute; left: 0; right: 0; bottom: 10px; margin: 0 auto; width: max-content; z-index: 5; display: flex; align-items: center; gap: 8px; background: var(--panel); border: 1px solid var(--accent); border-radius: 10px; padding: 6px 10px; max-width: min(92%, 600px); box-shadow: 0 2px 10px rgba(0,0,0,.25); }
+  #view.playing #pvFloat { bottom: 72px; }
+  #playbar .pb-text { min-width: 0; flex: 1; }
+  #playbar .pb-title { font-weight: 600; font-size: 12.5px; }
+  #playbar .pb-note { font-size: 11.5px; color: var(--muted); }
+  #playbar .btn { padding: 4px 9px; }
+  #playbar .btn:disabled { opacity: .4; cursor: default; }
+  /* сценарий показа */
+  .sc-tools { display: flex; gap: 6px; flex-wrap: wrap; margin: 6px 0; align-items: center; }
+  .sc-tools select { flex: 1; min-width: 120px; font: inherit; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--text); }
+  ol.steps { list-style: none; margin: 0; padding: 0; counter-reset: st; }
+  ol.steps li.step { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; margin-bottom: 5px; background: var(--panel2); font-size: 12.5px; counter-increment: st; }
+  ol.steps li.step::before { content: counter(st); color: var(--muted); font-size: 11px; min-width: 14px; }
+  ol.steps li.step .lbl { flex: 1; cursor: pointer; }
+  ol.steps li.step .lbl:hover { color: var(--accent); }
+  ol.steps li.step.sel { outline: 1px solid var(--accent); }
+  ol.steps li.step.cur { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent); }
+  ol.steps li.step .flags { color: var(--muted); font-size: 11px; display: flex; gap: 3px; }
+  ol.steps li.step .ops { display: flex; }
+  ol.steps li.empty { color: var(--muted); font-size: 12.5px; padding: 4px 2px; }
+  .sc-edit { border: 1px solid var(--accent); border-radius: 8px; padding: 8px 9px; margin-top: 6px; background: var(--panel2); }
+  .sc-edit label { display: block; font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .sc-edit input[type=text], .sc-edit textarea { width: 100%; font: inherit; font-size: 12.5px; padding: 4px 6px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--text); margin-top: 2px; }
+  .sc-edit .chk { display: flex; color: var(--text); }
+  @media (max-width: 980px) {
+    #showbar .sb-body { width: 190px; }
+    #pvFloat { width: min(62vw, 260px); bottom: 44px; }
+    #view.playing #pvFloat { bottom: 84px; }
+    #playbar { bottom: 8px; max-width: calc(100% - 16px); padding: 5px 8px; }
+    #normLegend { max-width: calc(100% - 100px); flex-wrap: wrap; row-gap: 2px; font-size: 10.5px; }
+  }
+
   @media (max-width: 980px) {
     #app { grid-template-columns: 1fr; grid-template-rows: auto 1fr; }
     #view { grid-row: 2; grid-column: 1; }
@@ -262,6 +313,25 @@
     <div id="normLegend" hidden><span class="sw norm"></span> норма <span class="sw chg"></span> изменено <span class="sw el"></span> элементы патологии <span class="sw post"></span> после лечения</div>
     <div id="hint">Вращение — левая кнопка, сдвиг — правая, масштаб — колесо. Клик по структуре — описание.</div>
     <div id="axisHint">Нос → справа · Висок ← слева</div>
+    <div id="showbar">
+      <button class="btn sb-toggle" id="showbarToggle" title="Настройки показа: прозрачность остального, подсветка, окно пациента">Показ ▾</button>
+      <div class="sb-body">
+        <label title="Насколько прозрачны структуры, не затронутые проблемой (100 % — скрыты совсем)">Прозрачность остального <span class="v" id="ctxOpVal"></span><input type="range" id="ctxOp" min="40" max="100" step="5"></label>
+        <label title="Сила подсветки затронутых структур; во время анимации изменения усиливается сама">Подсветка затронутого <span class="v" id="hlVal"></span><input type="range" id="hl" min="0" max="100" step="5"></label>
+        <label class="chk" title="При показе изменения окно «Как видит пациент» появляется поверх модели"><input type="checkbox" id="pvAuto"> пациент при показе</label>
+        <button class="btn" id="pvPin" title="Показать окно «Как видит пациент» поверх модели">Как видит пациент ⧉</button>
+      </div>
+    </div>
+    <div id="pvFloat" hidden>
+      <div class="pvf-head"><span>Как видит пациент</span><button class="iso" id="pvUnpin" title="Вернуть в панель">✕</button></div>
+      <div class="pvf-body"></div>
+    </div>
+    <div id="playbar" hidden>
+      <button class="btn" id="playPrev" title="Предыдущий шаг (←)">◀</button>
+      <div class="pb-text"><div class="pb-title" id="playTitle"></div><div class="pb-note" id="playNote"></div></div>
+      <button class="btn" id="playNext" title="Следующий шаг (→ или пробел)">▶</button>
+      <button class="iso" id="playStop" title="Закончить показ (Esc)">✕</button>
+    </div>
   </main>
 
   <aside id="right">
@@ -286,7 +356,8 @@
       <ul id="parentList" class="signs"></ul>
     </section>
     <section id="patient">
-      <div class="panel-title">Как видит пациент</div>
+      <div class="panel-title">Как видит пациент <button class="lbl" id="pvPin2" title="Показать окно поверх модели, чтобы не прокручивать панель">поверх модели</button></div>
+      <p class="agenote" id="pvAway" hidden>Окно показано поверх модели; закрыть его можно крестиком в самом окне.</p>
       <div id="pv">
         <canvas id="pvCanvas" width="480" height="300"></canvas>
         <canvas id="pvGhost" width="480" height="300"></canvas>
@@ -297,6 +368,24 @@
         <div class="ov" id="ovGlare"></div>
       </div>
       <div id="pvNote">Норма: чёткое изображение по всему полю.</div>
+    </section>
+    <section id="scenarioSec">
+      <div class="panel-title">Сценарий показа</div>
+      <p class="agenote">Настройте модель как нужно (возраст, проблема, ползунки, лечение, ракурс, окно пациента) и нажмите «Запомнить шаг»; повторите для каждого шага. «Зафиксировать» закрывает цепочку от правок, «Показ» ведёт по шагам кнопками «Далее» и «Назад» без прокрутки панелей.</p>
+      <div class="sc-tools">
+        <select id="scSelect" title="Сценарий"></select>
+        <button class="btn" id="scNew" title="Новый сценарий">+</button>
+        <button class="btn" id="scRename" title="Переименовать">✎</button>
+        <button class="btn" id="scDelete" title="Удалить сценарий">✕</button>
+      </div>
+      <ol id="scSteps" class="steps"></ol>
+      <div class="sc-tools">
+        <button class="btn" id="scAdd" title="Сохранить текущее состояние модели как следующий шаг">Запомнить шаг</button>
+        <button class="btn" id="scLock">Зафиксировать</button>
+        <button class="btn" id="scPlay" title="Проиграть цепочку шагов">▶ Показ</button>
+        <button class="btn" id="scCopy" title="Скопировать сценарий как JSON, чтобы вставить в config.js для всех устройств">JSON</button>
+      </div>
+      <div id="scEdit" class="sc-edit" hidden></div>
     </section>
     <section id="settingsSec" class="settings collapsed">
       <div class="panel-title toggle" id="settingsToggle">Настройки <span class="tw">▾</span></div>
