@@ -32,15 +32,15 @@
   const saveShow = () => { try { localStorage.setItem('eye3d.show', JSON.stringify({ context: show.context, highlight: show.highlight, pvAuto: show.pvAuto })); } catch (e) { /* нет хранилища */ } };
   // Подписи на модели под контролем врача: закрытые подписи и плашки, перетащенные подписи (смещение в px) и плашки (доля ширины/высоты сцены),
   // переключатели плашек, маркера и легенды. Хранится в браузере и попадает в шаги сценария.
-  const ann = { hiddenLabels: new Set(), hiddenCallouts: new Set(), labelOffsets: {}, calloutPins: {}, callouts: true, marker: true, legend: true };
+  const ann = { hiddenLabels: new Set(), hiddenCallouts: new Set(), labelOffsets: {}, calloutPins: {}, markerOffsets: {}, callouts: true, marker: true, legend: true };
   function readAnn(a) {
     if (!a || typeof a !== 'object') return;
     ann.hiddenLabels = new Set(Array.isArray(a.hiddenLabels) ? a.hiddenLabels : []); ann.hiddenCallouts = new Set(Array.isArray(a.hiddenCallouts) ? a.hiddenCallouts : []);
-    ann.labelOffsets = Object.assign({}, a.labelOffsets || {}); ann.calloutPins = Object.assign({}, a.calloutPins || {});
+    ann.labelOffsets = Object.assign({}, a.labelOffsets || {}); ann.calloutPins = Object.assign({}, a.calloutPins || {}); ann.markerOffsets = Object.assign({}, a.markerOffsets || {});
     ['callouts', 'marker', 'legend'].forEach(k => { ann[k] = typeof a[k] === 'boolean' ? a[k] : true; });
   }
   try { readAnn(JSON.parse(localStorage.getItem('eye3d.annot') || 'null')); } catch (e) { /* хранилище недоступно */ }
-  const annJSON = () => ({ hiddenLabels: [...ann.hiddenLabels], hiddenCallouts: [...ann.hiddenCallouts], labelOffsets: ann.labelOffsets, calloutPins: ann.calloutPins, callouts: ann.callouts, marker: ann.marker, legend: ann.legend });
+  const annJSON = () => ({ hiddenLabels: [...ann.hiddenLabels], hiddenCallouts: [...ann.hiddenCallouts], labelOffsets: ann.labelOffsets, calloutPins: ann.calloutPins, markerOffsets: ann.markerOffsets, callouts: ann.callouts, marker: ann.marker, legend: ann.legend });
   const saveAnn = () => { try { localStorage.setItem('eye3d.annot', JSON.stringify(annJSON())); } catch (e) { /* нет хранилища */ } syncAnnUI(); };
   // Перетаскивание подписи или плашки указателем; нажатие без движения считается кликом
   function makeDraggable(el, h) {
@@ -216,7 +216,13 @@
   const leaderEls = {};
   function updateLabelLeaders() {
     const vr = view.getBoundingClientRect();
-    Object.keys(leaderEls).forEach(id => { if (!ann.labelOffsets[id]) { leaderEls[id].remove(); delete leaderEls[id]; } });
+    const markerOn = markerObj.visible && focus.cond && ann.markerOffsets[focus.cond];
+    Object.keys(leaderEls).forEach(id => { if (id === '_marker' ? !markerOn : !ann.labelOffsets[id]) { leaderEls[id].remove(); delete leaderEls[id]; } });
+    if (markerOn) {
+      let p = leaderEls._marker; if (!p) { p = svgEl('path'); p.setAttribute('class', 'leader marker'); calloutSvg.appendChild(p); leaderEls._marker = p; }
+      markerObj.getWorldPosition(tmpV); const s = tmpV.project(camera), r = markerDiv.getBoundingClientRect();
+      p.setAttribute('d', `M${((s.x + 1) / 2 * vr.width).toFixed(1)},${((1 - s.y) / 2 * vr.height).toFixed(1)} L${(r.left - vr.left - 7).toFixed(1)},${(r.top - vr.top + r.height / 2).toFixed(1)}`);
+    }
     Object.keys(ann.labelOffsets).forEach(id => {
       const o = labels[id]; if (!o) return;
       const el = o.element, shown = o.visible && el.style.display !== 'none' && el.style.visibility !== 'hidden';
@@ -228,7 +234,7 @@
     });
   }
   function syncAnnUI() {
-    const n = ann.hiddenLabels.size + ann.hiddenCallouts.size + Object.keys(ann.labelOffsets).length + Object.keys(ann.calloutPins).length;
+    const n = ann.hiddenLabels.size + ann.hiddenCallouts.size + Object.keys(ann.labelOffsets).length + Object.keys(ann.calloutPins).length + Object.keys(ann.markerOffsets).length + ['callouts', 'marker', 'legend'].filter(k => !ann[k]).length;
     const b = $('#annReset'); if (b) { b.textContent = n ? `Вернуть подписи (${n})` : 'Вернуть подписи'; b.disabled = !n; }
     ['callouts', 'marker', 'legend'].forEach(k => { const el = $('#ann' + k[0].toUpperCase() + k.slice(1)); if (el) el.checked = ann[k]; });
   }
@@ -256,8 +262,14 @@
     });
   }
   // Маркер текущей проблемы
-  const markerDiv = document.createElement('div'); markerDiv.className = 'marker';
+  const markerDiv = document.createElement('div'); markerDiv.className = 'marker'; markerDiv.innerHTML = '<span class="mt"></span><span class="x" title="Скрыть маркер (вернуть можно флажком «маркер» в панели «Показ»)">×</span>';
   const markerObj = new THREE.CSS2DObject(markerDiv); markerObj.visible = false; eyeGroup.add(markerObj);
+  markerDiv.querySelector('.x').addEventListener('click', (e) => { e.stopPropagation(); ann.marker = false; saveAnn(); updateMarker(); });
+  makeDraggable(markerDiv, { onStart: () => Object.assign({ dx: 0, dy: 0 }, ann.markerOffsets[focus.cond]), onMove: (dx, dy) => { if (!focus.cond) return; ann.markerOffsets[focus.cond] = { dx: Math.round(dx), dy: Math.round(dy) }; applyMarkerOffset(); }, onEnd: () => saveAnn() });
+  function applyMarkerOffset() {
+    const o = focus.cond && ann.markerOffsets[focus.cond];
+    markerDiv.style.marginLeft = o ? o.dx + 'px' : ''; markerDiv.style.marginTop = o ? o.dy + 'px' : ''; markerDiv.classList.toggle('moved', !!o);
+  }
 
   // ---------- Ход лучей ----------
   const raysGroup = new THREE.Group(); eyeGroup.add(raysGroup); raysGroup.visible = false;
@@ -518,8 +530,9 @@
     if (v && v.marker) {
       markerObj.position.set(...v.marker); if (focus.cond === 'ametropia' || focus.cond === 'child_myopia') markerObj.position.y -= params.elong;
       const c = condById[focus.cond], p = c.params[0], tr = activeTreatment(c.id);
-      markerDiv.textContent = (v.short || c.name) + (p ? ' · ' + fmt(cond[c.id][p.id], p) : '') + (tr ? ' · после лечения' : '');
+      markerDiv.querySelector('.mt').textContent = (v.short || c.name) + (p ? ' · ' + fmt(cond[c.id][p.id], p) : '') + (tr ? ' · после лечения' : '');
       markerDiv.classList.toggle('post', !!tr);
+      applyMarkerOffset();
     }
   }
 
@@ -1450,7 +1463,7 @@
       const el = $('#ann' + k[0].toUpperCase() + k.slice(1));
       el.addEventListener('change', () => { ann[k] = el.checked; saveAnn(); updateMarker(); if (k === 'legend') { if (ann.legend) applyConditions(); else $('#normLegend').hidden = true; } });
     });
-    $('#annReset').addEventListener('click', () => { ann.hiddenLabels.clear(); ann.hiddenCallouts.clear(); ann.labelOffsets = {}; ann.calloutPins = {}; saveAnn(); Object.keys(labels).forEach(applyLabelOffset); updateLabels(); });
+    $('#annReset').addEventListener('click', () => { ann.hiddenLabels.clear(); ann.hiddenCallouts.clear(); ann.labelOffsets = {}; ann.calloutPins = {}; ann.markerOffsets = {}; const legendWasOff = !ann.legend; ann.callouts = ann.marker = ann.legend = true; saveAnn(); Object.keys(labels).forEach(applyLabelOffset); updateLabels(); updateMarker(); if (legendWasOff) applyConditions(); });
     if (!FT.callouts) $('#annCallouts').closest('label').hidden = true;
     syncAnnUI();
     // окно пациента можно перетащить за заголовок

@@ -76,7 +76,7 @@
   .label.moved { border-color: var(--accent); }
   .label.dragging, .callout.dragging { cursor: grabbing; opacity: .85; }
   .callout { touch-action: none; cursor: grab; }
-  .callout .x { position: absolute; right: 3px; top: 2px; font-size: 13px; padding: 0 2px; }
+  .callout .x { position: absolute; right: 3px; top: 2px; font-size: 13px; padding: 0 2px; opacity: .55; }
   .callout b { padding-right: 12px; }
   .callout.pinned { border-style: dashed; }
   #callouts path.leader { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
@@ -172,9 +172,13 @@
   @keyframes ringPulse { from { r: 5; opacity: .9; } to { r: 18; opacity: 0; } }
   @media (max-width: 980px) { .callout { width: 150px; font-size: 10.5px; } .callout b { font-size: 11px; } }
   /* маркер текущей проблемы в 3D */
-  .marker { pointer-events: none; font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 14px; background: var(--danger); color: #fff; white-space: nowrap; transform: translate(14px, -50%); box-shadow: 0 1px 4px rgba(0,0,0,.35); position: relative; }
+  .marker { pointer-events: auto; touch-action: none; cursor: grab; font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 14px; background: var(--danger); color: #fff; white-space: nowrap; transform: translate(14px, -50%); box-shadow: 0 1px 4px rgba(0,0,0,.35); position: relative; }
   .marker::before { content: ""; position: absolute; left: -12px; top: 50%; width: 10px; height: 10px; margin-top: -5px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 0 3px rgba(255,255,255,.85); }
   .marker.pulse::before { animation: markerPulse 1s ease-out infinite; }
+  .marker .x { margin-left: 7px; color: #fff; opacity: .75; cursor: pointer; font-weight: 700; }
+  .marker .x:hover { opacity: 1; }
+  .marker.dragging { cursor: grabbing; opacity: .85; }
+  #callouts path.leader.marker { stroke: var(--danger); stroke-dasharray: 4 3; stroke-width: 1.5; }
   @keyframes markerPulse { 0% { box-shadow: 0 0 0 3px rgba(255,255,255,.9), 0 0 0 4px var(--danger); } 100% { box-shadow: 0 0 0 3px rgba(255,255,255,0), 0 0 0 22px rgba(184,54,44,0); } }
   /* возраст */
   #age { width: 100%; }
